@@ -31,7 +31,9 @@ app.post('/api/cloudinary/delete', async (req, res) => {
 
 const updateDestImage = require('./update-dest-image');
 
-const BASE_PORT = parseInt(process.env.PORT, 10) || 3002;
+// Allow an explicit ADMIN_PORT so this admin API (Cloudinary routes) can be started
+// on a different port than other services. Falls back to PORT and then to 3002.
+const BASE_PORT = parseInt(process.env.ADMIN_PORT || process.env.PORT, 10) || 3002;
 const MAX_ATTEMPTS = 10; // try BASE_PORT .. BASE_PORT + MAX_ATTEMPTS - 1
 
 function startServer(port, attemptsLeft) {
