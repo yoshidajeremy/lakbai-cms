@@ -47,10 +47,11 @@ export default function ImagesCMS() {
     const loadImages = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/cloudinary-images');
-            const data = await response.json();
-            setImages(
-                data.map(img => ({
+        const response = await fetch(`${API_BASE}/api/cloudinary-images`);
+        const data = await response.json();
+        const list = data.resources || []; // ✅ fix for returned object shape
+        setImages(
+            list.map(img => ({
                     id: img.public_id,
                     url: img.secure_url,
                     publicId: img.public_id,
