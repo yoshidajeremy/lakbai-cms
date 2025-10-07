@@ -29,13 +29,11 @@ app.post('/api/cloudinary/delete', async (req, res) => {
     }
 });
 
-// simple endpoint that returns uploaded resources (adjust options as needed)
+// Add /api/cloudinary-images if not present
 app.get('/api/cloudinary-images', async (req, res) => {
   try {
-    // optional: paging / max_results can be changed
     const result = await cloudinary.api.resources({ type: 'upload', max_results: 500 });
-    // send only resources array so frontend gets a predictable payload
-    return res.json(result.resources || []);
+    return res.json({ resources: result.resources || [] });
   } catch (err) {
     console.error('cloudinary-images error', err);
     return res.status(500).json({ error: err.message || 'Cloudinary error' });

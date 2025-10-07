@@ -51,7 +51,9 @@ try {
     fs.writeFileSync(OUTPUT_FILE, JSON.stringify(json, null, 2));
     console.log(`Updated ${OUTPUT_FILE} with ${json.length} images.`);
 } catch (err) {
-    console.error("Failed to sync Cloudinary images:", err.message);
+    console.error('Failed to sync Cloudinary images:', err.response?.data || err.message || err);
+    // allow deploy to continue while you debug
+    process.exit(0);
 }
 }
 

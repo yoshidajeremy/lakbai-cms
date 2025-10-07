@@ -1,4 +1,3 @@
-
 const express = require('express');
 const router = express.Router();
 const cloudinary = require('cloudinary').v2;
@@ -21,20 +20,15 @@ router.post('/api/cloudinary/delete', async (req, res) => {
   }
 });
 
-// GET /api/cloudinary-images - List all JPG images in 'destinations' folder
+// Add this endpoint to return uploaded images
 router.get('/cloudinary-images', async (req, res) => {
   try {
-    const result = await cloudinary.api.resources({
-      type: 'upload',
-      max_results: 100,
-      resource_type: 'image',
-    });
-    console.log('Cloudinary result:', result); // <-- Add this line
-    const jpgImages = result.resources.filter(img => img.format === 'jpg');
-    res.json(jpgImages);
+    // adjust options (prefix, max_results, next_cursor) as needed
+    const result = await cloudinary.api.resources({ type: 'upload', max_results: 500 });
+    return res.json({ resources: result.resources || [] });
   } catch (err) {
-    console.error('Cloudinary error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('cloudinary-images error', err?.response?.data || err.message || err);
+    return res.status(500).json({ error: err.message || 'Cloudinary error' });
   }
 });
 
