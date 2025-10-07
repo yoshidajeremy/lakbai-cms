@@ -6,7 +6,7 @@
     "@emailjs/browser": "^4.4.1",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/user-event": "^13.5.0",
-    "axios": "^1.11.0",
+    "axios": "^1.12.2",
     "cloudinary": "^2.7.0",
     "cloudinary-react": "^1.8.1",
     "cors": "^2.8.5",
