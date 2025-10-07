@@ -55,15 +55,9 @@ function AppInner() {
         <Route
           path="/"
           element={
-            isAuthenticated() ? (
-              <Navigate to="/dashboard" replace />
-            ) : (
-              <Navigate to="/login" replace />
-            )
+            <Navigate to="/admin/login" replace />
           }
         />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
 
         {/* Admin routes (no main header/footer) */}
         <Route path="/admin/login" element={<LoginCMS />} />
@@ -87,8 +81,8 @@ function AppInner() {
           <Route path="/itinerary" element={<Itinerary />} />
         </Route>
 
-        {/* Fallback */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
+  {/* Fallback */}
+  <Route path="*" element={<Navigate to="/admin/login" replace />} />
       </Routes>
 
       {showAIModal && <ChatbaseAIModal onClose={() => setShowAIModal(false)} />}
