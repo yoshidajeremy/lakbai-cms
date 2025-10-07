@@ -4,6 +4,11 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(process.cwd(), '.env') });
 const cloudinary = require('cloudinary').v2;
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 const app = express();
 
@@ -17,11 +22,6 @@ app.get('/', (req, res) => {
 });
 
 // 🧩 Cloudinary configuration
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
 
 // 🧠 Import routes
 const cloudinaryRoutes = require('./cloudinaryRoutes');
@@ -45,10 +45,10 @@ app.post('/api/cloudinary/delete', async (req, res) => {
 app.get('/api/cloudinary-images', async (req, res) => {
   try {
     const result = await cloudinary.api.resources({ type: 'upload', max_results: 500 });
-    res.json({ resources: result.resources || [] });
+    return res.json({ resources: result.resources || [] });
   } catch (err) {
     console.error('cloudinary-images error', err?.response?.data || err.message || err);
-    res.status(500).json({ error: err.message || 'Cloudinary error' });
+    return res.status(500).json({ error: err.message || 'Cloudinary error' });
   }
 });
 

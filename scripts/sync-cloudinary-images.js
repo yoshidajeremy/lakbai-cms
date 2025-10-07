@@ -1,11 +1,17 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
-const cloudinary = require('cloudinary').v2;
 
-const CLOUD_NAME = "dcv3eqmde";
-const API_KEY = "213199444474897";
-const API_SECRET = "z0qptwMS1KxJiYb_Z5ssZy39aSo";
+// ensure env is loaded when this script runs during prestart
+require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env') });
+
+const cloudinary = require('cloudinary').v2;
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
 const FOLDER = "destinations";
 const OUTPUT_FILE = path.join(__dirname, "../src/dest-images.json");
 
@@ -43,7 +49,7 @@ return baseName.replace(/_/g, " ");
 
 async function main() {
   try {
-    // request must include type for this API
+    // include required type param and a max_results
     const resp = await cloudinary.api.resources({ type: 'upload', max_results: 500 });
     const json = resp.resources.map(img => ({
     name: normalizeName(img.public_id),
@@ -53,9 +59,8 @@ async function main() {
     fs.writeFileSync(OUTPUT_FILE, JSON.stringify(json, null, 2));
     console.log(`Updated ${OUTPUT_FILE} with ${json.length} images.`);
   } catch (err) {
-    // log full error for debugging but do not fail the whole deploy
     console.error('Failed to sync Cloudinary images:', err?.response?.data || err.message || err);
-    // allow the build/start to continue so the service comes up
+    // do not fail the whole deploy — allow server to start and debug later
     process.exit(0);
   }
 }
