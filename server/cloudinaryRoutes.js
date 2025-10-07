@@ -20,10 +20,17 @@ router.post('/api/cloudinary/delete', async (req, res) => {
   }
 });
 
-// Add this endpoint to return uploaded images
+// Ensure cloudinary is configured in your start sequence (index.js) or here:
+// cloudinary.config({
+//   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+//   api_key: process.env.CLOUDINARY_API_KEY,
+//   api_secret: process.env.CLOUDINARY_API_SECRET,
+// });
+
+// Add endpoint: GET /api/cloudinary-images
 router.get('/cloudinary-images', async (req, res) => {
   try {
-    // adjust options (prefix, max_results, next_cursor) as needed
+    // adjust options (prefix, max_results) if you need filtering/paging
     const result = await cloudinary.api.resources({ type: 'upload', max_results: 500 });
     return res.json({ resources: result.resources || [] });
   } catch (err) {
