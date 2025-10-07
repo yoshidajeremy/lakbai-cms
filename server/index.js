@@ -31,7 +31,28 @@ app.post('/api/cloudinary/delete', async (req, res) => {
 
 const updateDestImage = require('./update-dest-image');
 
-const PORT = process.env.PORT || 3002;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Admin API listening on http://localhost:${PORT}`);
-});
+const BASE_PORT = parseInt(process.env.PORT, 10) || 3002;
+const MAX_ATTEMPTS = 10; // try BASE_PORT .. BASE_PORT + MAX_ATTEMPTS - 1
+
+function startServer(port, attemptsLeft) {
+    const server = app.listen(port, '0.0.0.0', () => {
+        console.log(`Admin API listening on http://localhost:${port}`);
+    });
+
+    server.on('error', (err) => {
+        if (err && err.code === 'EADDRINUSE') {
+            console.warn(`Port ${port} in use.`);
+            if (attemptsLeft > 1) {
+                startServer(port + 1, attemptsLeft - 1);
+            } else {
+                console.error(`No available ports (${BASE_PORT}-${BASE_PORT + MAX_ATTEMPTS - 1}). Exiting.`);
+                process.exit(1);
+            }
+        } else {
+            console.error('Server error', err);
+            process.exit(1);
+        }
+    });
+}
+
+startServer(BASE_PORT, MAX_ATTEMPTS);
