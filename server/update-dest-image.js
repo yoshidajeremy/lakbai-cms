@@ -63,12 +63,11 @@ app.post("/api/delete-dest-image", (req, res) => {
     res.json({ success: true });
 });
 
-const DEFAULT_PORT = 4001;
+const PORT = process.env.PORT || 4001; // 4001 is fallback for local dev
 
-function startServer(port) {
-  const server = app.listen(port, () => 
-    console.log(`Update dest-image API running on port ${port}`)
-  );
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Update dest-image API running on port ${PORT}`);
+});
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -83,6 +82,5 @@ function startServer(port) {
       throw err;
     }
   });
-}
 
 startServer(DEFAULT_PORT);
