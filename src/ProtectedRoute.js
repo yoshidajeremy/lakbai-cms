@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
+import { isAdminAuthenticated } from "./App"; // or wherever it's defined
 
 export default function ProtectedRoute({ children }) {
+  const isAdmin = isAdminAuthenticated(); // or your logic
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const location = useLocation();
@@ -36,5 +38,5 @@ export default function ProtectedRoute({ children }) {
     return <Navigate to="/admin/login" replace />;
   }
 
-  return children;
+  return isAdmin ? children : <Navigate to="/admin/login" replace />;
 }
