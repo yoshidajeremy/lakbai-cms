@@ -34,8 +34,9 @@
   },
   "scripts": {
     "prestart": "node scripts/sync-cloudinary-images.js",
-    "start": "concurrently \"npm run start-frontend\" \"npm run start-backend\" \"npm run start-server\"",
-  "start-frontend": "node scripts/start-frontend-safe.js",
+    "dev": "concurrently \"npm run start-frontend\" \"npm run start-backend\" \"npm run start-server\"",
+    "start": "node server/index.js",
+    "start-frontend": "node scripts/start-frontend-safe.js",
     "start-backend": "node server/update-dest-image.js",
     "start-server": "cd server && node index.js",
     "build": "react-scripts build",
