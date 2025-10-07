@@ -32,6 +32,6 @@ app.post('/api/cloudinary/delete', async (req, res) => {
 const updateDestImage = require('./update-dest-image');
 
 const PORT = process.env.PORT || 3002;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`Admin API listening on http://localhost:${PORT}`);
 });
