@@ -68,19 +68,3 @@ const PORT = process.env.PORT || 4001; // 4001 is fallback for local dev
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Update dest-image API running on port ${PORT}`);
 });
-
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      if (port < 4010) { // Try next port up to 4010
-        console.warn(`Port ${port} in use, trying port ${port + 1}...`);
-        startServer(port + 1);
-      } else {
-        console.error('No available ports (4001-4010). Exiting.');
-        process.exit(1);
-      }
-    } else {
-      throw err;
-    }
-  });
-
-startServer(DEFAULT_PORT);
