@@ -29,7 +29,7 @@ app.post('/api/cloudinary/delete', async (req, res) => {
     }
 });
 
-// Add this endpoint to return uploaded resources
+// Add this handler (returns array of uploaded resources)
 app.get('/api/cloudinary-images', async (req, res) => {
   try {
     const result = await cloudinary.api.resources({ type: 'upload', max_results: 500 });
