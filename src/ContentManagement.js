@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import './Styles/contentManager.css';
 import { db, auth, storage } from './firebase';
-import { collection, getDocs, doc, setDoc, updateDoc, addDoc, deleteDoc, getCountFromServer, onSnapshot, query, where, orderBy, limit, serverTimestamp, collectionGroup, documentId, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, updateDoc, addDoc, deleteDoc, getCountFromServer, onSnapshot, query, where, orderBy, limit, serverTimestamp, collectionGroup, documentId, getDoc, startAfter } from 'firebase/firestore';
 import { CloudinaryContext, Image } from './cloudinary';
 import EditProfileCMS from './editprofile-cms'; // NEW
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -19,9 +19,6 @@ import 'react-toastify/dist/ReactToastify.css';
 import ImagesCMS from './images-cms';
 import NotFoundCMS from './notfound-cms';
 import destImages from './dest-images.json';
-
-// ...existing code...
-
 
 // Cloudinary config
 const CLOUDINARY_UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || 'lakbai_preset';
@@ -633,46 +630,7 @@ const handleTakeAction = async ({ actionType, reason, notes }) => {
       if (typeof unsubRep2 === 'function') unsubRep2();
     };
   }, [active]);
-
-useEffect(() => {
-    if (active !== 'destinations') return;
-    (async () => {
-    setLoadingDest(true);
-    try {
-        // Use Firestore from firebase.js
-    const snap = await getDocs(collection(db, 'destinations'));
-    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    setDestinations(items);
-    } catch (e) {
-        setDestinations([]);
-    } finally {
-        setLoadingDest(false);
-    }
-    })();
-}, [active]);
-
-useEffect(() => {
-    if (active !== 'users') return;
-    setLoadingUsers(true);
-
-    // Use Firestore from firebase.js
-    // Always fetch the latest users from Firestore, not just on mount
-    const unsub = onSnapshot(
-      collection(db, 'users'),
-      (snap) => {
-        setUsers(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-        setLoadingUsers(false);
-      },
-      (error) => {
-        setUsers([]);
-        setLoadingUsers(false);
-      }
-    );
-
-    return () => unsub();
-}, [active]);
-
-// NEW: fetch Travel Stats (places, photos, reviews) for users from Firestore
+  
 useEffect(() => {
   if (active !== 'users' || !users?.length) return;
   let cancelled = false;
@@ -690,7 +648,6 @@ useEffect(() => {
       }
     }
   };
-
   const tallyDestinationsFromTripDocs = async (tripDocs) => {
     let total = 0;
     for (const d of tripDocs) {
@@ -1011,67 +968,6 @@ useEffect(() => {
   const [reportType, setReportType] = useState('all');         // all | Post | Comment | Review | Message
   const [viewReport, setViewReport] = useState(null);
 
-  // Load Reports (Firestore -> fallback to sample)
-  useEffect(() => {
-    if (active !== 'reports') return;
-
-    setLoadingReports(true);
-    let unsub = null;
-
-    // Try both 'report' and 'reports' collections, fallback to empty
-    const tryLoadFrom = async (collName) => {
-      try {
-        const collRef = collection(db, collName);
-        const fields = ['date', 'createdAt', 'timestamp'];
-
-        // Try ordered queries by several possible date fields
-        for (const f of fields) {
-          try {
-            const qref = query(collRef, orderBy(f, 'desc'), limit(200));
-            // Use onSnapshot for live updates
-            unsub = onSnapshot(qref, (snap) => {
-              setReports(snap.docs.map((doc) => normalizeReportDoc(doc)));
-              setLoadingReports(false);
-            });
-            // Initial fetch
-            const snap = await getDocs(qref);
-            if (!snap.empty) {
-              setReports(snap.docs.map((doc) => normalizeReportDoc(doc)));
-              return true;
-            }
-          } catch (err) {
-            // ignore (index may not exist or permission denied)
-          }
-        }
-
-        // Unordered fallback
-        try {
-          unsub = onSnapshot(collRef, (snap) => {
-            setReports(snap.docs.map((doc) => normalizeReportDoc(doc)));
-            setLoadingReports(false);
-          });
-          const snap = await getDocs(collRef);
-          if (!snap.empty) {
-            setReports(snap.docs.map((doc) => normalizeReportDoc(doc)));
-            return true;
-          }
-        } catch {}
-
-      } catch {}
-      return false;
-    };
-
-    (async () => {
-      const ok = (await tryLoadFrom('report')) || (await tryLoadFrom('reports'));
-      if (!ok) {
-        setReports([]); // nothing found or no permission
-        setLoadingReports(false);
-      }
-    })();
-
-    return () => { if (typeof unsub === 'function') unsub(); };
-  }, [active]);
-
   // Helpers for badges (styles match screenshot)
   const PriorityBadge = ({ v }) => {
     const t = (v || '').toString().toLowerCase();
@@ -1236,9 +1132,6 @@ useEffect(() => {
 
   useEffect(() => {
     if (!viewReportId) return;
-  
-
-  
     let unsub;
 
     const trySub = (collName) => {
@@ -1355,6 +1248,140 @@ useEffect(() => {
 
   return statusMatch && categoryMatch && searchMatch;
 });
+
+// Pagination for Destinations
+const DEST_PAGE_SIZE = 12;
+const [destPage, setDestPage] = useState(1);
+const [lastDestDoc, setLastDestDoc] = useState(null);
+const [hasMoreDest, setHasMoreDest] = useState(true);
+
+useEffect(() => {
+  if (active !== 'destinations') return;
+  setLoadingDest(true);
+
+  // Try cache for first page
+  if (destPage === 1) {
+    const cached = JSON.parse(localStorage.getItem('destinations_page1') || '[]');
+    if (cached.length) setDestinations(cached);
+  }
+
+  let q = query(collection(db, 'destinations'), orderBy('updatedAt', 'desc'), limit(DEST_PAGE_SIZE));
+  if (lastDestDoc) {
+    q = query(collection(db, 'destinations'), orderBy('updatedAt', 'desc'), startAfter(lastDestDoc), limit(DEST_PAGE_SIZE));
+  }
+
+  getDocs(q).then((snap) => {
+    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (destPage === 1) {
+      setDestinations(items);
+      localStorage.setItem('destinations_page1', JSON.stringify(items));
+    } else {
+      setDestinations((prev) => [...prev, ...items]);
+    }
+    setHasMoreDest(items.length === DEST_PAGE_SIZE);
+    setLastDestDoc(snap.docs[snap.docs.length - 1]);
+  }).finally(() => setLoadingDest(false));
+}, [active, destPage]);
+
+// Pagination for Reports
+const REPORT_PAGE_SIZE = 20;
+const [reportPage, setReportPage] = useState(1);
+const [lastReportDoc, setLastReportDoc] = useState(null);
+const [hasMoreReports, setHasMoreReports] = useState(true);
+
+useEffect(() => {
+  if (active !== 'reports') return;
+  setLoadingReports(true);
+
+  if (reportPage === 1) {
+    const cached = JSON.parse(localStorage.getItem('reports_page1') || '[]');
+    if (cached.length) setReports(cached);
+  }
+
+  let q = query(collection(db, 'report'), orderBy('createdAt', 'desc'), limit(REPORT_PAGE_SIZE));
+  if (lastReportDoc) {
+    q = query(collection(db, 'report'), orderBy('createdAt', 'desc'), startAfter(lastReportDoc), limit(REPORT_PAGE_SIZE));
+  }
+
+  getDocs(q).then((snap) => {
+    const items = snap.docs.map((doc) => normalizeReportDoc(doc));
+    if (reportPage === 1) {
+      setReports(items);
+      localStorage.setItem('reports_page1', JSON.stringify(items));
+    } else {
+      setReports((prev) => [...prev, ...items]);
+    }
+    setHasMoreReports(items.length === REPORT_PAGE_SIZE);
+    setLastReportDoc(snap.docs[snap.docs.length - 1]);
+  }).finally(() => setLoadingReports(false));
+}, [active, reportPage]);
+
+// Pagination for Audit Logs
+const LOG_PAGE_SIZE = 50;
+const [logPage, setLogPage] = useState(1);
+const [lastLogDoc, setLastLogDoc] = useState(null);
+const [hasMoreLogs, setHasMoreLogs] = useState(true);
+const [logs, setLogs] = useState([]);
+
+useEffect(() => {
+  if (active !== 'audit-logs') return;
+  setLoading(true);
+
+  if (logPage === 1) {
+    const cached = JSON.parse(localStorage.getItem('logs_page1') || '[]');
+    if (cached.length) setLogs(cached);
+  }
+
+  let q = query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), limit(LOG_PAGE_SIZE));
+  if (lastLogDoc) {
+    q = query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), startAfter(lastLogDoc), limit(LOG_PAGE_SIZE));
+  }
+
+  getDocs(q).then((snap) => {
+    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (logPage === 1) {
+      setLogs(items);
+      localStorage.setItem('logs_page1', JSON.stringify(items));
+    } else {
+      setLogs((prev) => [...prev, ...items]);
+    }
+    setHasMoreLogs(items.length === LOG_PAGE_SIZE);
+    setLastLogDoc(snap.docs[snap.docs.length - 1]);
+  }).finally(() => setLoading(false));
+}, [active, logPage]);
+
+// Pagination for Users
+const USER_PAGE_SIZE = 20;
+const [userPage, setUserPage] = useState(1);
+const [lastUserDoc, setLastUserDoc] = useState(null);
+const [hasMoreUsers, setHasMoreUsers] = useState(true);
+
+useEffect(() => {
+  if (active !== 'users') return;
+  setLoadingUsers(true);
+
+  if (userPage === 1) {
+    const cached = JSON.parse(localStorage.getItem('users_page1') || '[]');
+    if (cached.length) setUsers(cached);
+  }
+
+  let q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(USER_PAGE_SIZE));
+  if (lastUserDoc) {
+    q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), startAfter(lastUserDoc), limit(USER_PAGE_SIZE));
+  }
+
+  getDocs(q).then((snap) => {
+    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (userPage === 1) {
+      setUsers(items);
+      localStorage.setItem('users_page1', JSON.stringify(items));
+    } else {
+      setUsers((prev) => [...prev, ...items]);
+    }
+    setHasMoreUsers(items.length === USER_PAGE_SIZE);
+    setLastUserDoc(snap.docs[snap.docs.length - 1]);
+  }).finally(() => setLoadingUsers(false));
+}, [active, userPage]);
 
   return (
     <div className="cms-root">
@@ -1496,6 +1523,11 @@ useEffect(() => {
                         <button className="btn-primary-cms" onClick={openCreate} style={{ padding: '10px 16px', borderRadius: 12 }}>
                             + Add New destination
                         </button>
+                        {hasMoreDest && (
+                          <button className="btn-secondary" onClick={() => setDestPage(destPage + 1)}>
+                            Load More
+                          </button>
+                        )}
                     </div>
                 </div>
 
@@ -1721,8 +1753,15 @@ useEffect(() => {
                 <h2 className="title" style={{ margin: 0 }}>Content Reports</h2>
                 <p className="muted" style={{ marginTop: 4 }}>Review and moderate reported community content</p>
               </div>
+
               <div className="muted small" style={{ marginLeft: 'auto' }}>{filteredReports.length} reports</div>
+              {hasMoreReports && (
+                <button className="btn-secondary" onClick={() => setReportPage(reportPage + 1)}>
+                  Load More
+                </button>
+              )}
             </div>
+              
             {/* Filters row */}
             <div className="content-card" style={{ padding: 16, borderRadius: 12, display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
               <div className="content-reports-filters">
@@ -1788,7 +1827,7 @@ useEffect(() => {
       >
         {/* Report Details */}
         <div className="reports-table-cell" data-label="Report Details">
-          <div style={{ fontWeight: 700 }}>{r.title}</div>
+                   <div style={{ fontWeight: 700 }}>{r.title}</div>
           <div className="muted small">By: {r.reporterName || (r.reporterId ? userNameCache[r.reporterId] : '') || '—'}</div>
         </div>
         {/* Reported User */}
@@ -1879,6 +1918,11 @@ useEffect(() => {
               >
                 + Add New User
               </button>
+              {hasMoreUsers && (
+                <button className="btn-secondary" onClick={() => setUserPage(userPage + 1)}>
+                  Load More
+                </button>
+              )}
             </div>
 
             {/* Search + Status filter row */}

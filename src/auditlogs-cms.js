@@ -8,7 +8,8 @@ import {
   getDocs,
   onSnapshot,
   addDoc,
-  serverTimestamp
+  serverTimestamp,
+  startAfter
 } from 'firebase/firestore';
 import ViewAuditLogModal from './viewauditlog-cms'; // NEW
 
@@ -168,7 +169,7 @@ function useWindowWidth() {
   return width;
 }
 
-export default function AuditLogsCMS({ useFirestore = true, pageSize = 200 }) {
+export default function AuditLogsCMS({ active, useFirestore = true, pageSize = 200 }) {
   const db = useMemo(() => {
     try {
       return getFirestore();
@@ -177,7 +178,7 @@ export default function AuditLogsCMS({ useFirestore = true, pageSize = 200 }) {
     }
   }, []);
 
-  const [logs, setLogs] = useState([]);
+
   const [loading, setLoading] = useState(false);
 
   // Filters
@@ -188,6 +189,40 @@ export default function AuditLogsCMS({ useFirestore = true, pageSize = 200 }) {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [viewLog, setViewLog] = useState(null);
+
+const LOG_PAGE_SIZE = 20;
+const [logPage, setLogPage] = useState(1);
+const [lastLogDoc, setLastLogDoc] = useState(null);
+const [hasMoreLogs, setHasMoreLogs] = useState(true);
+const [logs, setLogs] = useState([]);
+
+useEffect(() => {
+  if (active !== 'audit-logs') return;
+  setLoading(true);
+
+  if (logPage === 1) {
+    const cached = JSON.parse(localStorage.getItem('logs_page1') || '[]');
+    if (cached.length) setLogs(cached);
+  }
+
+  let q = query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), limit(LOG_PAGE_SIZE));
+  if (lastLogDoc) {
+    q = query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), startAfter(lastLogDoc), limit(LOG_PAGE_SIZE));
+  }
+
+  getDocs(q).then((snap) => {
+    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (logPage === 1) {
+      setLogs(items);
+      localStorage.setItem('logs_page1', JSON.stringify(items));
+    } else {
+      setLogs((prev) => [...prev, ...items]);
+    }
+    setHasMoreLogs(items.length === LOG_PAGE_SIZE);
+    setLastLogDoc(snap.docs[snap.docs.length - 1]);
+  }).finally(() => setLoading(false));
+}, [active, logPage]);
+
 
   // Load
   useEffect(() => {
@@ -349,6 +384,11 @@ export default function AuditLogsCMS({ useFirestore = true, pageSize = 200 }) {
           >
             ⬇ Export CSV
           </button>
+          {hasMoreLogs && (
+            <button className="btn-secondary" onClick={() => setLogPage(logPage + 1)}>
+              Load More
+            </button>
+          )}
         </div>
       </div>
 
@@ -812,4 +852,5 @@ async function logSample1(user) {
 });
 }
 
-<AuditLogsCMS useFirestore={true} pageSize={200} />
+// The AuditLogsCMS component is exported above as default and should be rendered
+// from your application entry point (e.g. App.js or index.js) where `active` is defined.
