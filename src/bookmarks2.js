@@ -39,6 +39,15 @@ async function logActivity(text, icon = "🔵") {
     console.error("Error logging activity:", error);
   }
 }
+// Helper to get image URL for a destination
+export async function fetchAllCloudinaryImages() {
+  const snap = await getDocs(collection(db, "cloudinaryImages"));
+  const map = {};
+  snap.forEach(doc => {
+    map[doc.id] = doc.data().url;
+  });
+  return map; // { "Bat-ongan Cave": "https://...", ... }
+}
 
 export default function Bookmarks2() {
   // Firestore-backed destinations and bookmarks

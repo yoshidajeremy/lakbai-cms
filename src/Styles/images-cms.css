@@ -33,7 +33,7 @@ margin-bottom: 10px;
 /* 2-column responsive grid */
 .images-cms-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 24px;
   width: 100%;
   transition: width 0.3s;
@@ -363,3 +363,6 @@ color: #6b7280;
   opacity: 1;
   pointer-events: auto;
 }
+
+.form-input{display:block;width:auto;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:#fbfcfe;font-size:14px;color:#0f172a;outline:none}.form-input:focus{box-shadow:0 6px 20px rgba(59,130,246,0.08);border-color:#cfe4ff}
+textarea.form-input{min-height:84px;resize:vertical;padding-top:10px}

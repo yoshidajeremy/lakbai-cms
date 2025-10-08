@@ -12,7 +12,7 @@ import AddFromCsvCMS from './addfromcsv-cms'; // NEW
 import ReportDetailModal from './reportdetails-cms'; //NEW
 import TakeActionModal from './takeaction-cms'; // NEW
 import AuditLogsCMS from './auditlogs-cms'; // NEW
-import { signOut } from "firebase/auth";
+import { getAuth, signOut } from "firebase/auth";
 import { publishAllDrafts } from './publishAllDrafts';
 import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -291,6 +291,9 @@ function ContentManagement() {
 
   // Audit Logs modal state
   const [showAuditLogs, setShowAuditLogs] = useState(false);
+
+  // Sign-out confirmation modal state
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
 
   // Activity state for User Profile
   const [userActivity, setUserActivity] = useState([]);
@@ -1390,18 +1393,19 @@ useEffect(() => {
         <button
           className="btn-danger-signout"
           style={{ marginTop: 8 }}
-          onClick={async () => {
-            await signOut(auth);
-            window.location.href = "/admin/login"; // or your login route
-            }}
-          >
-            Sign Out
-          </button>
+          onClick={() => {
+            console.log('Sign Out clicked');
+            setShowSignOutConfirm(true);
+          }}
+        >
+          Sign Out
+        </button>
+
           </div>
           </aside>
           <main className="main-content">
           <div className="page-wrap">
-
+          
           {active === 'dashboard' && (
             <div className="dashboard">
             <header style={{ marginBottom: 18, textAlign: 'left', alignItems: 'flex-start', justifyContent: 'flex-start' }}>
@@ -1538,6 +1542,7 @@ useEffect(() => {
                 )}
 
                 <div className="filters content-card" style={{ display: 'flex', gap: 12, padding: 16, alignItems: 'center', marginBottom: 18 }}>
+                    <div className="content-reports-filters">
                     <div className="search-bar" style={{ position: 'relative', flex: 1, border: 'none' }}>
                     <span className="search-icon">🔎</span>
                     <input
@@ -1573,30 +1578,10 @@ useEffect(() => {
                     <option>Lakes</option>
                     <option>Heritage</option>
                     </select>
-
-                    <button
-                    className="btn-secondary"
-                    onClick={async () => {
-                        setLoadingDest(true);
-                        try {
-                        if (window.firebase && window.firebase.firestore) {
-                            const db = window.firebase.firestore();
-                            const snap = await db.collection('destinations').get();
-                            setDestinations(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-                        } else {
-                            setDestinations(JSON.parse(localStorage.getItem('destinations') || '[]'));
-                        }
-                        } catch {
-                        setDestinations([]);
-                        } finally {
-                        setLoadingDest(false);
-                        }
-                    }}
-                    style={{ background: 'linear-gradient(90deg,#10b981,#059669)', color: '#fff', borderRadius: 10, padding: '10px 18px' }}
-                    >
-                    🔄 Refresh
-                    </button>
+                    
+                    </div>
                 </div>
+                
 
                 <div className="content-card" style={{ padding: 40, borderRadius: 12, minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
                     {loadingDest ? (
@@ -1740,116 +1725,126 @@ useEffect(() => {
             </div>
             {/* Filters row */}
             <div className="content-card" style={{ padding: 16, borderRadius: 12, display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
-              <div style={{ position: 'relative', flex: 1 }}>
-                <span className="search-icon" style={{ position: 'absolute', left: 14, top: 22, opacity: 0.6 }}>🔎</span>
-                <input
-                  className="form-input"
-                  style={{ width: '100%', paddingLeft: 40 }}
-                  placeholder="Search reports..."
-                  value={reportSearch}
-                  onChange={(e) => setReportSearch(e.target.value)}
-                />
+              <div className="content-reports-filters">
+                <div style={{ position: 'relative', flex: 1}}>
+                  <span className="search-icon" style={{ position: 'absolute', left: 14, top: 22, opacity: 0.6 }}>🔎</span>
+                  <input
+                    className="form-input"
+                    style={{ width: '100%', paddingLeft: 40 }}
+                    placeholder="Search reports..."
+                    value={reportSearch}
+                    onChange={(e) => setReportSearch(e.target.value)}
+                  />
+                </div>
+
+                <select className="form-input" value={reportStatus} onChange={(e) => setReportStatus(e.target.value)} style={{ width: 160 }}>
+                  <option value="all">All Status</option>
+                  <option value="pending">Pending</option>
+                  <option value="under_review">Under Review</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="escalated">Escalated</option>
+                </select>
+
+                <select className="form-input" value={reportPriority} onChange={(e) => setReportPriority(e.target.value)} style={{ width: 160 }}>
+                  <option value="all">All Priority</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+
+                <select className="form-input" value={reportType} onChange={(e) => setReportType(e.target.value)} style={{ width: 160 }}>
+                  <option value="all">All Types</option>
+                  <option value="Post">Post</option>
+                  <option value="Comment">Comment</option>
+                  <option value="Review">Review</option>
+                  <option value="Message">Message</option>
+                </select>
               </div>
-              <select className="form-input" value={reportStatus} onChange={(e) => setReportStatus(e.target.value)} style={{ width: 160 }}>
-                <option value="all">All Status</option>
-                <option value="pending">Pending</option>
-                <option value="under_review">Under Review</option>
-                <option value="resolved">Resolved</option>
-                <option value="escalated">Escalated</option>
-              </select>
-
-              <select className="form-input" value={reportPriority} onChange={(e) => setReportPriority(e.target.value)} style={{ width: 160 }}>
-                <option value="all">All Priority</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-
-              <select className="form-input" value={reportType} onChange={(e) => setReportType(e.target.value)} style={{ width: 160 }}>
-                <option value="all">All Types</option>
-                <option value="Post">Post</option>
-                <option value="Comment">Comment</option>
-                <option value="Review">Review</option>
-                <option value="Message">Message</option>
-              </select>
             </div>
 
             {/* Table */}
-            <div className="content-card" style={{ padding: 0, borderRadius: 12, overflow: 'hidden' }}>
-              {/* Header */}
-              <div style={{ display: 'grid', gridTemplateColumns: '3fr 1.6fr 1.2fr 1.6fr 1fr 1.2fr 1.2fr 1.2fr', gap: 0, background: '#f6f8fa', color: '#6b7280', fontWeight: 700, fontSize: 14 }}>
-                {['Report Details', 'Reported User', 'Content Type', 'Reason', 'Priority', 'Status', 'Reported Date', 'Actions'].map((h) => (
-                  <div key={h} style={{ padding: '14px 16px', borderBottom: '1px solid #eef2f7' }}>
-                    {h}
-                  </div>
-                ))}
+ <div className="content-card reports-table-responsive" style={{ padding: 0, borderRadius: 12, overflow: 'hidden' }}>
+  {/* Header */}
+  <div className="reports-table-header">
+    {['Report Details', 'Reported User', 'Content Type', 'Reason', 'Priority', 'Status', 'Reported Date', 'Actions'].map((h) => (
+      <div key={h} className="reports-table-cell" style={{ fontWeight: 700, color: '#6b7280', background: '#f6f8fa', fontSize: 14, borderBottom: '1px solid #eef2f7' }}>
+        {h}
+      </div>
+    ))}
+  </div>
+  {loadingReports ? (
+    <div className="centered" style={{ padding: 40 }}><div className="loading-spinner" /></div>
+  ) : filteredReports.length === 0 ? (
+    <div className="muted" style={{ padding: 24 }}>No reports found</div>
+  ) : (
+    filteredReports.map((r, i) => (
+      <div
+        key={r.id || i}
+        className="reports-table-row"
+        style={{
+          background: i % 2 ? '#fff' : '#fafbfc',
+          borderBottom: '1px solid #eef2f7'
+        }}
+      >
+        {/* Report Details */}
+        <div className="reports-table-cell" data-label="Report Details">
+          <div style={{ fontWeight: 700 }}>{r.title}</div>
+          <div className="muted small">By: {r.reporterName || (r.reporterId ? userNameCache[r.reporterId] : '') || '—'}</div>
+        </div>
+        {/* Reported User */}
+        <div className="reports-table-cell" data-label="Reported User">
+          {(() => {
+            const ruId = typeof r.reportedUser === 'string'
+              ? r.reportedUser
+              : r?.reportedUser?.id || '';
+            const ruName = (typeof r.reportedUserName === 'object' && r.reportedUserName?.name)
+              ? r.reportedUserName.name
+              : (ruId ? userNameCache[ruId] : null) || '—';
+            const initial = (ruName || 'U').trim().charAt(0).toUpperCase();
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#6366f1', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 600 }}>
+                  {initial}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600 }}>{ruName}</div>
+                  <div className="muted small">ID: {ruId || '—'}</div>
+                </div>
               </div>
-
-              {loadingReports ? (
-                <div className="centered" style={{ padding: 40 }}><div className="loading-spinner" /></div>
-              ) : filteredReports.length === 0 ? (
-                <div className="muted" style={{ padding: 24 }}>No reports found</div>
-              ) : (
-                filteredReports.map((r, i) => (
-                  <div key={r.id || i} style={{ display: 'grid', gridTemplateColumns: '3fr 1.6fr 1.2fr 1.6fr 1fr 1.2fr 1.2fr 1.2fr', alignItems: 'center', background: i % 2 ? '#fff' : '#fafbfc', borderBottom: '1px solid #eef2f7' }}>
-                    {/* Report Details */}
-                    <div style={{ padding: '14px 16px' }}>
-                      <div style={{ fontWeight: 700 }}>{r.title}</div>
-                      {/* UPDATED: fallback to cache using reporterId */}
-                      <div className="muted small">By: {r.reporterName || (r.reporterId ? userNameCache[r.reporterId] : '') || '—'}</div>
-                    </div>
-                    {/* Reported User */}
-                    {(() => {
-                      const ruId = typeof r.reportedUser === 'string'
-                        ? r.reportedUser
-                        : r?.reportedUser?.id || '';
-                      const ruName = (typeof r.reportedUserName === 'object' && r.reportedUserName?.name)
-                        ? r.reportedUserName.name
-                        : (ruId ? userNameCache[ruId] : null) || '—';
-                      const initial = (ruName || 'U').trim().charAt(0).toUpperCase();
-                      return (
-                        <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#6366f1', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 600 }}>
-                            {initial}
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 600 }}>{ruName}</div>
-                            <div className="muted small">ID: {ruId || '—'}</div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                    {/* Content Type */}
-                    <div style={{ padding: '14px 16px' }}>{r.contentType}</div>
-                    {/* Reason */}
-                    <div style={{ padding: '14px 16px' }}>{r.reason}</div>
-                    {/* Priority */}
-                    <div style={{ padding: '14px 16px' }}><PriorityBadge v={r.priority} /></div>
-                    {/* Status */}
-                    <div style={{ padding: '14px 16px' }}><StatusBadge v={r.status} /></div>
-                    {/* Date */}
-                    <div style={{ padding: '14px 16px' }}>{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ''}</div>
-                    {/* Actions */}
-                    <div style={{ padding: '14px 16px', display: 'flex', gap: 8 }}>
-                      <button
-                        className="btn-view"
-                        style={{ background: '#e0e7ff', color: '#2563eb', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
-                        onClick={() => { setViewReport(r); setViewReportId(r.id); }}
-                      >
-                        View
-                      </button>
-                      <button
-                        className="btn-secondary"
-                        style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
-                        onClick={() => openActionModal(r)}
-                      >
-                        Action
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+            );
+          })()}
+        </div>
+        {/* Content Type */}
+        <div className="reports-table-cell" data-label="Content Type">{r.contentType}</div>
+        {/* Reason */}
+        <div className="reports-table-cell" data-label="Reason">{r.reason}</div>
+        {/* Priority */}
+        <div className="reports-table-cell" data-label="Priority"><PriorityBadge v={r.priority} /></div>
+        {/* Status */}
+        <div className="reports-table-cell" data-label="Status"><StatusBadge v={r.status} /></div>
+        {/* Date */}
+        <div className="reports-table-cell" data-label="Reported Date">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ''}</div>
+        {/* Actions */}
+        <div className="reports-table-cell" data-label="Actions" style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn-view"
+            style={{ background: '#e0e7ff', color: '#2563eb', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
+            onClick={() => { setViewReport(r); setViewReportId(r.id); }}
+          >
+            View
+          </button>
+          <button
+            className="btn-secondary"
+            style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
+            onClick={() => openActionModal(r)}
+          >
+            Action
+          </button>
+        </div>
+      </div>
+    ))
+  )}
+</div>
 
             {/* View modal */}
             {viewReport && (
@@ -2165,8 +2160,52 @@ useEffect(() => {
 
         {/* images tab - placeholder for now */}
         {active === 'images' && <ImagesCMS />}
-
+      {showSignOutConfirm && (
+          <div className="modal-overlay signout-modal" onClick={e => { if (e.target === e.currentTarget) setShowSignOutConfirm(false); }}>
+            <div className="modal-box signout-modal-content">
+              <div className="modal-header">
+                <span className="modal-title">Confirm Sign Out</span>
+                <button className="modal-close" onClick={() => setShowSignOutConfirm(false)}>&times;</button>
+              </div>
+              <div className="modal-body">
+                <div style={{ textAlign: 'center', marginBottom: 18 }}>
+                  <img src="/warning%20(1).png" alt="Warning" style={{ width: 48, marginBottom: 12, animation: "shake 0.5s" }} />
+                  <h3 style={{ margin: 0, fontWeight: 600 }}>Are you sure you want to sign out?</h3>
+                  <div className="muted" style={{ marginTop: 8 }}>You will be redirected to the admin login page.</div>
+                </div>
+                <div className="form-actions" style={{ justifyContent: 'center', marginTop: 18 }}>
+                  <button
+                    className="btn-danger"
+                    style={{ minWidth: 120, fontWeight: 700, fontSize: 15 }}
+                    onClick={async () => {
+                      console.log('Yes, Sign Out');
+                      setShowSignOutConfirm(false);
+                      try {
+                        await signOut(auth);
+                        console.log('Sign out successful');
+                        window.location.href = "/admin/login";
+                      } catch (err) {
+                        console.error('Sign out failed:', err);
+                        alert('Sign out failed: ' + err.message);
+                      }
+                    }}
+                  >
+                    Yes, Sign Out
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    style={{ minWidth: 120, fontWeight: 700, fontSize: 15 }}
+                    onClick={() => setShowSignOutConfirm(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
+
   {deleteConfirmOpen && deleteTarget && (
   <div
     style={{
