@@ -9,6 +9,15 @@ import NotFoundCMS from './notfound-cms'; // Add this import at the top
 
 const CLOUDINARY_CLOUD_NAME = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME || 'dcv3eqmde';
 
+// API base can be configured using REACT_APP_API_BASE (e.g. https://lakbai-cms-server.onrender.com)
+// If not set, defaults to relative paths so localhost proxy or same-origin will work.
+const API_BASE = process.env.REACT_APP_API_BASE || '';
+const apiUrl = (path) => {
+    if (!path.startsWith('/')) path = '/' + path;
+    if (API_BASE) return API_BASE.replace(/\/$/, '') + path;
+    return path; // relative
+};
+
 const fs = window.require ? window.require('fs') : null; // For Electron/Node context
 
 export default function ImagesCMS() {
@@ -38,10 +47,11 @@ export default function ImagesCMS() {
     const loadImages = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/cloudinary-images');
-            const data = await response.json();
-            setImages(
-                data.map(img => ({
+        const response = await fetch(`${API_BASE}/api/cloudinary-images`);
+        const data = await response.json();
+        const list = data.resources || []; // ✅ fix for returned object shape
+        setImages(
+            list.map(img => ({
                     id: img.public_id,
                     url: img.secure_url,
                     publicId: img.public_id,
@@ -201,8 +211,7 @@ export default function ImagesCMS() {
                 // Also update dest-images.json if needed (see previous logic)
                 if (fs) {
                     try {
-                        const path = window.require('path');
-                        const jsonPath = path.join(__dirname, './dest-images.json');
+                        const jsonPath = require('path').join(__dirname, './dest-images.json');
                         let current = [];
                         try {
                             current = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
@@ -216,7 +225,7 @@ export default function ImagesCMS() {
                         // Silent fail for browser context
                     }
                 } else {
-                    await fetch('http://localhost:4001/api/update-dest-image', {
+                    await fetch(apiUrl('/api/update-dest-image'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ name: actualName, url: data.secure_url })
@@ -287,7 +296,7 @@ export default function ImagesCMS() {
                 const publicId = img.publicId;
                 if (publicId) {
                     // Call your backend endpoint to delete from Cloudinary
-                    const res = await fetch('http://localhost:3002/api/cloudinary/delete', {
+                    const res = await fetch(apiUrl('/api/cloudinary/delete'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ publicId })
@@ -302,7 +311,7 @@ export default function ImagesCMS() {
                     action: 'photo delete',
                     category: 'dest. image delete',
                     target: `photo (${img.publicId})`,
-                    request: `DELETE http://localhost:3002/api/cloudinary/delete`,
+                    request: `DELETE ${apiUrl('/api/cloudinary/delete')}`,
                     outcome: 'SUCCESS',
                     user: 'Aclan Jeremy',
                     role: 'admin',
@@ -333,8 +342,7 @@ export default function ImagesCMS() {
                 });
                 try {
                     if (fs) {
-                        const path = window.require('path');
-                        const jsonPath = path.join(__dirname, './dest-images.json');
+                        const jsonPath = require('path').join(__dirname, './dest-images.json');
                         let current = [];
                         try {
                             current = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
@@ -346,7 +354,7 @@ export default function ImagesCMS() {
                         fs.writeFileSync(jsonPath, JSON.stringify(updated, null, 2), 'utf8');
                     } else {
                         // Call backend API to remove from dest-images.json by name only
-                        await fetch('http://localhost:4001/api/delete-dest-image', {
+                        await fetch(apiUrl('/api/delete-dest-image'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ name: img.name })
@@ -557,7 +565,7 @@ export default function ImagesCMS() {
                 />
                 </div>
                 <select
-                    className="form-input"
+                    className="images-cms-status-dropdown"
                     value={status}
                     onChange={(e) => setStatus(e.target.value)}
                     style={{ width: 160 }}
