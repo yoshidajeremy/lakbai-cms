@@ -3,6 +3,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 
+
 function isAdminAuthenticated() {
   const adminToken = localStorage.getItem("adminToken");
   return typeof adminToken === "string" && adminToken.trim().length > 0;

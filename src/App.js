@@ -20,14 +20,6 @@ import ProtectedRoute from "./ProtectedRoute";
 import { ToastContainer } from 'react-toastify';
 
 // Authentication helpers (unchanged)
-function isAuthenticated() {
-  const token = localStorage.getItem('token');
-  return typeof token === 'string' && token.trim().length > 0;
-}
-function isAdminAuthenticated() {
-  const adminToken = localStorage.getItem('adminToken');
-  return typeof adminToken === 'string' && adminToken.trim().length > 0;
-}
 
 function AppInner() {
   const [showAIModal, setShowAIModal] = useState(false);
