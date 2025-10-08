@@ -58,7 +58,8 @@ export default function LoginCMS() {
                 action: "admin_login",
                 timestamp: serverTimestamp()
             });
-
+            
+            localStorage.setItem('adminToken', user.uid); // <-- ADD THIS LINE
             setIsAdmin(true);
             navigate("/admin/ContentManagement", { replace: true }); // Redirect after successful login
         } catch (err) {
