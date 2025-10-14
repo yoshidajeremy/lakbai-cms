@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, serverTimestamp, deleteDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, serverTimestamp, deleteDoc, doc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import './Styles/contentManager.css';
 import './Styles/images-cms.css';
 import { FiCopy } from "react-icons/fi"; // Add this if using react-icons, or use your preferred icon
 import destImages from './dest-images.json'; // Import for local use
 import NotFoundCMS from './notfound-cms'; // Add this import at the top
+import { auth } from './firebase';
+
 
 const CLOUDINARY_CLOUD_NAME = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME || 'dcv3eqmde';
 
@@ -20,6 +22,18 @@ const apiUrl = (path) => {
 
 const fs = window.require ? window.require('fs') : null; // For Electron/Node context
 
+// cloudinaryRes.public_id = "Boracay_jznlvq"
+// cloudinaryRes.secure_url = "https://res.cloudinary.com/.../Boracay_jznlvq.jpg"
+async function saveImageToFirestore(cloudinaryRes) {
+    const docRef = doc(db, 'cloudinaryImages', cloudinaryRes.public_id);
+    await setDoc(docRef, {
+        url: cloudinaryRes.secure_url,
+        createdAt: new Date(),
+        // ...any other metadata
+    });
+}
+
+
 export default function ImagesCMS() {
     const [images, setImages] = useState([]);
     const [selectedImages, setSelectedImages] = useState([]);
@@ -33,6 +47,7 @@ export default function ImagesCMS() {
     const [uploadProgress, setUploadProgress] = useState(0);
     const [uploadTotal, setUploadTotal] = useState(0);
     const [uploadDone, setUploadDone] = useState(0);
+    
 
     // New state for delete confirmation and error
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -47,19 +62,26 @@ export default function ImagesCMS() {
     const loadImages = async () => {
         setLoading(true);
         try {
-        const response = await fetch(`${API_BASE}/api/cloudinary-images`);
-        const data = await response.json();
-        const list = data.resources || []; // ✅ fix for returned object shape
-        setImages(
-            list.map(img => ({
-                    id: img.public_id,
-                    url: img.secure_url,
-                    publicId: img.public_id,
-                    name: img.public_id.split('/').pop().replace(/_/g, ' ').replace('.jpg', ''),
-                    createdBy: img.uploaded_by || 'Unknown',
-                    createdAt: img.created_at
-                }))
-            );
+            // Fetch from Firestore 'photos' collection
+            const snapshot = await getDocs(collection(db, 'photos'));
+            const data = snapshot.docs.map(docSnap => ({
+                id: docSnap.id, // Firestore document ID
+                ...docSnap.data()
+            }));
+                setImages(
+                    Array.isArray(data)
+                        ? data.map(img => ({
+                            id: img.id,
+                            url: img.url,
+                            publicId: img.publicId,
+                            name: img.name,
+                            createdBy: img.createdBy || 'Unknown',
+                            createdAt: typeof img.createdAt === 'string'
+                                ? Date.parse(img.createdAt)
+                                : (img.createdAt || 0)
+                        }))
+                        : []
+                );
         } catch (err) {
             console.error('Error loading images:', err);
         }
@@ -162,7 +184,7 @@ export default function ImagesCMS() {
             }
             // Check for duplicate name (case-insensitive, ignore .jpg)
             const newName = file.name.replace(/\.jpe?g$/i, '').trim().toLowerCase();
-            const isDuplicate = images.some(img => img.name.trim().toLowerCase() === newName);
+            const isDuplicate = images.some(img => (img.name || '').trim().toLowerCase() === newName);
             if (isDuplicate) {
                 setUploadError('Image with this name already exists.');
                 setTimeout(() => setUploadError(''), 3000);
@@ -208,6 +230,14 @@ export default function ImagesCMS() {
                     createdAt: Date.now(),
                 });
 
+                // Use the actualName (image name) as the document name
+                const imageDocRef = doc(db, 'cloudinaryImages', actualName);
+                await setDoc(imageDocRef, {
+                    imageUrl: data.secure_url,
+                    createdAt: new Date(),
+                    publicId: data.public_id
+                });
+
                 // Also update dest-images.json if needed (see previous logic)
                 if (fs) {
                     try {
@@ -231,47 +261,6 @@ export default function ImagesCMS() {
                         body: JSON.stringify({ name: actualName, url: data.secure_url })
                     });
                 }
-
-                // Write Audit Log to Firebase
-                const auditLog = {
-                    eventId: `${Date.now()}`,
-                    timestamp: new Date().toISOString(),
-                    action: 'photo upload',
-                    category: 'destination image',
-                    target: `photo (${data.public_id})`,
-                    request: `POST https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`,
-                    outcome: data.secure_url ? 'SUCCESS' : 'failure',
-                    user: {
-                        name: 'Aclan Jeremy',
-                        username: 'aclanjeremy432@gmail.com',
-                        role: 'Admin',
-                        userId: 'cuuEceXHEmOMa37xQeSTFbixeqt2',
-                        session: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-                    },
-                    source: {
-                        device: navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop',
-                        browser: navigator.userAgent,
-                        os: navigator.userAgentData?.platform || navigator.platform,
-                    },
-                    securityFlags: 'None',
-                    eventDetails: {
-                        filename: file.name,
-                        size: `${(file.size / 1024 / 1024).toFixed(2)}MB`,
-                        location: data.public_id.split('/')[0] || 'unknown',
-                    },
-                    userAgent: navigator.userAgent,
-                    dataChanges: {
-                        filename: file.name,
-                        size: `${(file.size / 1024 / 1024).toFixed(2)}MB`,
-                        location: data.public_id.split('/')[0] || 'unknown',
-                    },
-                    createdAt: serverTimestamp(),
-                };
-                await addDoc(collection(db, 'auditLogs'), auditLog);
-
-                setUploadDone(done => done + 1);
-                setUploadProgress(0);
-                await loadImages();
             } catch (err) {
                 setUploadError('Image upload failed. Please try again.');
                 console.error(err);
@@ -285,6 +274,17 @@ export default function ImagesCMS() {
         e.target.value = '';
     };
 
+        // Helper to find Firestore doc ID by publicId
+    async function getPhotoDocIdByPublicId(publicId) {
+        const snapshot = await getDocs(collection(db, 'photos'));
+        for (const docSnap of snapshot.docs) {
+            if (docSnap.data().publicId === publicId) {
+                return docSnap.id;
+            }
+        }
+        return null;
+    }
+
     // Delete handler
     const handleDeleteImages = async () => {
         setDeleting(true);
@@ -295,7 +295,6 @@ export default function ImagesCMS() {
                 // Delete from Cloudinary
                 const publicId = img.publicId;
                 if (publicId) {
-                    // Call your backend endpoint to delete from Cloudinary
                     const res = await fetch(apiUrl('/api/cloudinary/delete'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -303,66 +302,12 @@ export default function ImagesCMS() {
                     });
                     if (!res.ok) throw new Error('Cloudinary delete failed');
                 }
-                // Delete from Firestore
-                await deleteDoc(doc(db, 'photos', img.id));
-                await addDoc(collection(db, 'auditLogs'), {
-                    eventId: `${Date.now()}`,
-                    timestamp: new Date().toISOString(),
-                    action: 'photo delete',
-                    category: 'dest. image delete',
-                    target: `photo (${img.publicId})`,
-                    request: `DELETE ${apiUrl('/api/cloudinary/delete')}`,
-                    outcome: 'SUCCESS',
-                    user: 'Aclan Jeremy',
-                    role: 'admin',
-                    user: {
-                        name: 'Aclan Jeremy',
-                        username: 'aclanjeremy432@gmail.com',
-                        role: 'admin',
-                        userId: 'cuuEceXHEmOMa37xQeSTFbixeqt2',
-                        session: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-                    },
-                    source: {
-                        device: navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop',
-                        browser: navigator.userAgent,
-                        os: navigator.userAgentData?.platform || navigator.platform,
-                    },
-                    securityFlags: 'None',
-                    eventDetails: {
-                        filename: img.name,
-                        url: img.url,
-                        publicId: img.publicId,
-                    },
-                    userAgent: navigator.userAgent,
-                    dataChanges: {
-                        deleted: true,
-                        imageId: img.id,
-                    },
-                    createdAt: serverTimestamp(),
-                });
-                try {
-                    if (fs) {
-                        const jsonPath = require('path').join(__dirname, './dest-images.json');
-                        let current = [];
-                        try {
-                            current = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-                        } catch {}
-                        // Remove entry with matching name (case-insensitive, trimmed)
-                        const updated = current.filter(
-                            imgEntry => imgEntry.name?.trim().toLowerCase() !== img.name.trim().toLowerCase()
-                        );
-                        fs.writeFileSync(jsonPath, JSON.stringify(updated, null, 2), 'utf8');
-                    } else {
-                        // Call backend API to remove from dest-images.json by name only
-                        await fetch(apiUrl('/api/delete-dest-image'), {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: img.name })
-                        });
-                    }
-                } catch (err) {
-                    // Silent fail for browser context
+                // Delete from Firestore (find doc by publicId)
+                const docId = await getPhotoDocIdByPublicId(publicId);
+                if (docId) {
+                    await deleteDoc(doc(db, 'photos', docId));
                 }
+                // ...existing code for dest-images.json...
             }
             setImages(prev => prev.filter(img => !selectedImages.includes(img.id)));
             setSelectedImages([]);
@@ -373,11 +318,11 @@ export default function ImagesCMS() {
         setDeleting(false);
     };
 
-    // Helper: Parse CSV and map region to destination names
-    function parseRegionCsv(csvText) {
-        const lines = csvText.split('\n').filter(Boolean);
-        const regionMap = {};
-        for (const line of lines) {
+// Helper: Parse CSV and map region to destination names
+function parseRegionCsv(csvText) {
+    const lines = csvText.split('\n').filter(Boolean);
+    const regionMap = {};
+    for (const line of lines) {
             const [region, name] = line.split(',');
             if (region && name) {
                 if (!regionMap[region.trim()]) regionMap[region.trim()] = [];
@@ -386,25 +331,6 @@ export default function ImagesCMS() {
         }
         return regionMap;
     }
-
-    // Load region-destination mapping once
-    const [regionMap, setRegionMap] = useState({});
-    useEffect(() => {
-        fetch('/src/region-destinations.csv')
-            .then(res => res.text())
-            .then(csv => setRegionMap(parseRegionCsv(csv)));
-    }, []);
-
-    // Filter images by region using CSV and dest-images.json
-    const filteredImages = images.filter(img => {
-        if (status === 'all') return true;
-        // Find matching destination names for selected region
-        const regionNames = regionMap[status] || [];
-        // Check if image name matches any destination name in region
-        return regionNames.some(destName =>
-            img.name.trim().toLowerCase() === destName.trim().toLowerCase()
-        );
-    }).filter(img => img.name.toLowerCase().includes(search.toLowerCase()));
 
     return (
         <div className="content-section">
@@ -564,31 +490,6 @@ export default function ImagesCMS() {
                     onChange={e => setSearch(e.target.value)}
                 />
                 </div>
-                <select
-                    className="images-cms-status-dropdown"
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value)}
-                    style={{ width: 160 }}
-                >
-                    <option value="all">Region</option>
-                    <option value="CAR">CAR - Cordillera Administrative Region</option>
-                    <option value="CARAGA">CARAGA - Region XIII</option>
-                    <option value="ILOCOS">Ilocos Region</option>
-                    <option value="NCR">NCR - National Capital Region</option>
-                    <option value="REGION_I">Region I - Ilocos Region</option>
-                    <option value="REGION_IV_B">Region IV-B - MIMAROPA</option>
-                    <option value="REGION_V">Region V - Bicol Region</option>
-                    <option value="REGION_VI">Region VI - Western Visayas</option>
-                    <option value="REGION_VII">Region VII - Central Visayas</option>
-                    <option value="REGION_VIII">Region VIII - Eastern Visayas</option>
-                    <option value="REGION_IX">Region IX - Zamboanga Peninsula</option>
-                    <option value="REGION_X">Region X - Northern Mindanao</option>
-                    <option value="REGION_XI">Region XI - Davao Region</option>
-                    <option value="REGION_XII">Region XII - SOCCSKSARGEN</option>
-                    <option value="REGION_XIII">Region XIII - CARAGA</option>
-                    <option value="NCR">NCR - National Capital Region</option>
-                    <option value="BARMM">BARMM - Bangsamoro Autonomous Region in Muslim Mindanao</option>
-                </select>
             </div>
 
             <div className="images-cms-rows-container">
@@ -601,7 +502,12 @@ export default function ImagesCMS() {
                             </div>
                         ) : (
                             (() => {
-                                const filtered = images.filter(img => img.name.toLowerCase().includes(search.toLowerCase()));
+                                const filtered = images
+                                .slice() // create a shallow copy to avoid mutating state
+                                .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) // newest first            
+                                .filter(img => img.name && img.publicId)
+                                .filter(img => (img.name || '').toLowerCase().includes(search.toLowerCase()));
+
                                 if (filtered.length === 0) {
                                     return (
                                         <div style={{ gridColumn: '1/-1', width: '100%' }}>
@@ -657,7 +563,7 @@ export default function ImagesCMS() {
                                             {
                                                 // Remove a trailing 6-character ID if separated by space, else show full name
                                                 (() => {
-                                                    const match = image.name.match(/^(.*)\s([a-zA-Z0-9]{6})$/);
+                                                    const match = (image.name || '').match(/^(.*)\s([a-zA-Z0-9]{6})$/);
                                                     return match ? match[1] : image.name;
                                                 })()
                                             }
@@ -673,8 +579,8 @@ export default function ImagesCMS() {
                                                     <span>{image.publicId}</span>
                                                 </div>
                                                 <div className="detail-row">
-                                                    <span className="detail-label">Created By:</span>
-                                                    <span>{image.createdBy}</span>
+                                                    <span className="detail-label">Firebase ID:</span>
+                                                    <span>{image.id}</span>
                                                 </div>
                                                 <div className="detail-row">
                                                     <span className="detail-label">Created At:</span>
