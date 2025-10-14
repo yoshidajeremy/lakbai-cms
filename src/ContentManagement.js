@@ -20,6 +20,7 @@ import ImagesCMS from './images-cms';
 import NotFoundCMS from './notfound-cms';
 import destImages from './dest-images.json';
 
+
 // Cloudinary config
 const CLOUDINARY_UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || 'lakbai_preset';
 const CLOUDINARY_CLOUD_NAME = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME || 'dxvewejox';
@@ -1395,9 +1396,10 @@ useEffect(() => {
           <button className={`sidebar-item ${active === 'dashboard' ? 'active' : ''}`} onClick={() => setActive('dashboard')}>
             <span className="icon">📊</span> <span>Dashboard</span>
           </button>
-          <button className={`sidebar-item ${active === 'audit-logs' ? 'active' : ''}`} onClick={() => setActive('audit-logs')}>
+          {/* <button className={`sidebar-item ${active === 'audit-logs' ? 'active' : ''}`} onClick={() => setActive('audit-logs')}>
             <span className="icon">📜</span> <span>Audit Logs</span>
           </button>
+          */}
           <button className={`sidebar-item ${active === 'destinations' ? 'active' : ''}`} onClick={() => setActive('destinations')}>
             <span className="icon">🏖️</span> <span>Destinations</span>
           </button>
@@ -1410,9 +1412,10 @@ useEffect(() => {
           <button className={`sidebar-item ${active === 'images' ? 'active' : ''}`} onClick={() => setActive('images')}>
             <span className="icon">🖼️</span> <span>Images</span>
           </button>
-          <button className={`sidebar-item ${active === 'settings' ? 'active' : ''}`} onClick={() => setActive('settings')}>
+          {/*<button className={`sidebar-item ${active === 'settings' ? 'active' : ''}`} onClick={() => setActive('settings')}>
             <span className="icon">⚙️</span> <span>Settings</span>
           </button>
+          */}
         </nav>
 
         <div className="sidebar-footer">
@@ -1420,9 +1423,16 @@ useEffect(() => {
         <button
           className="btn-danger-signout"
           style={{ marginTop: 8 }}
-          onClick={() => {
-            console.log('Sign Out clicked');
-            setShowSignOutConfirm(true);
+          onClick={async () => {
+            console.log('Yes, Sign Out');
+            setShowSignOutConfirm(false);
+            try {
+              await signOut(auth);
+              window.location.href = "/admin/login";
+            } catch (err) {
+              console.error('Sign out failed:', err);
+              alert('Sign out failed: ' + err.message);
+            }
           }}
         >
           Sign Out
@@ -1489,12 +1499,12 @@ useEffect(() => {
           )}
           </div>
 
-          {active === 'audit-logs' && (
+          {/* {active === 'audit-logs' && (
               <div className="content-section">
               <AuditLogsCMS useFirestore={true} pageSize={200} />
             </div>
-          )}
-          
+          )} */}
+
           {active === 'destinations' && (
             <div className="content-section">
               <div className="section-header" style={{ alignItems: 'flex-start' }}>
@@ -2213,7 +2223,6 @@ useEffect(() => {
               </div>
               <div className="modal-body">
                 <div style={{ textAlign: 'center', marginBottom: 18 }}>
-                  <img src="/warning%20(1).png" alt="Warning" style={{ width: 48, marginBottom: 12, animation: "shake 0.5s" }} />
                   <h3 style={{ margin: 0, fontWeight: 600 }}>Are you sure you want to sign out?</h3>
                   <div className="muted" style={{ marginTop: 8 }}>You will be redirected to the admin login page.</div>
                 </div>
@@ -2226,7 +2235,6 @@ useEffect(() => {
                       setShowSignOutConfirm(false);
                       try {
                         await signOut(auth);
-                        console.log('Sign out successful');
                         window.location.href = "/admin/login";
                       } catch (err) {
                         console.error('Sign out failed:', err);
