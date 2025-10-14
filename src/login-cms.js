@@ -5,6 +5,7 @@ import ContentManagement from "./ContentManagement";
 import "./Styles/login-cms.css";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
+import { auth } from './firebase'; // instead of getAuth()
 
 export default function LoginCMS() {
     const [email, setEmail] = useState("");
@@ -15,7 +16,6 @@ export default function LoginCMS() {
     const [showPassword, setShowPassword] = useState(false);
     const [emailError, setEmailError] = useState("");
 
-    const auth = getAuth();
     const db = getFirestore();
     const navigate = useNavigate();
 
