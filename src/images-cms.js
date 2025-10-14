@@ -230,6 +230,8 @@ export default function ImagesCMS() {
                     createdAt: Date.now(),
                 });
 
+                setUploadDone(done => done + 1); // <-- Add this line here  
+
                 // Use the actualName (image name) as the document name
                 const imageDocRef = doc(db, 'cloudinaryImages', actualName);
                 await setDoc(imageDocRef, {
