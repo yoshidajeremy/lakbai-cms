@@ -8,6 +8,14 @@ app.use(cors());
 
 const DEST_IMAGES_PATH = path.join(__dirname, "../src/dest-images.json");
 const appendDestImages = require('../src/api/appendDestImages');
+const cloudinary = require('cloudinary').v2;
+
+// Configure Cloudinary (use your actual credentials)
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dcv3eqmde',
+    api_key: process.env.CLOUDINARY_API_KEY || '213199444474897',
+    api_secret: process.env.CLOUDINARY_API_SECRET || 'z0qptwMS1KxJiYb_Z5ssZy39aSo',
+});
 
 app.post("/api/update-dest-image", (req, res) => {
   const { name, url } = req.body;
@@ -63,6 +71,44 @@ app.post("/api/delete-dest-image", (req, res) => {
     res.json({ success: true });
 });
 
+app.get("/api/cloudinary-images", (req, res) => {
+    const destImagesPath = path.join(__dirname, "../src/dest-images.json");
+    fs.readFile(destImagesPath, "utf8", (err, data) => {
+        if (err) {
+            return res.status(500).json({ error: "Failed to read dest-images.json" });
+        }
+        try {
+            const images = JSON.parse(data);
+            res.json(images);
+        } catch (e) {
+            res.status(500).json({ error: "Invalid JSON in dest-images.json" });
+        }
+    });
+});
+
+app.post('/api/cloudinary/delete', async (req, res) => {
+    const { publicId } = req.body;
+    console.log('Delete request for publicId:', publicId);
+    console.log('Delete request for publicId:', publicId);
+    
+    if (!publicId) {
+        return res.status(400).json({ error: 'Missing publicId' });
+    }
+    try {
+        const result = await cloudinary.uploader.destroy(publicId);
+        console.log('Cloudinary destroy result:', result);
+        
+        if (result.result === 'ok' || result.result === 'not found') {
+            return res.json({ success: true });
+        } else {
+            return res.status(500).json({ error: 'Cloudinary delete failed', details: result });
+        }
+    } catch (err) {
+        console.error('Cloudinary delete error:', err);
+        return res.status(500).json({ error: 'Cloudinary delete error', details: err.message });
+    }
+});
+
 const BASE_PORT = parseInt(process.env.PORT, 10) || 4001; // base port to try
 const MAX_ATTEMPTS = 10; // try BASE_PORT .. BASE_PORT + MAX_ATTEMPTS - 1
 
@@ -87,5 +133,10 @@ function startServer(port, attemptsLeft) {
     }
   });
 }
+console.log('Cloudinary config:', {
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET ? '***' : undefined
+});
 
 startServer(BASE_PORT, MAX_ATTEMPTS);
