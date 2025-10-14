@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import ReactDOM from 'react-dom'; // ADD THIS IMPORT
 import './Styles/bookmark2.css';
 import { db, auth } from './firebase';
 import { useNavigate } from 'react-router-dom';
@@ -17,10 +18,68 @@ import {
   arrayRemove,
   deleteDoc,
   addDoc,
+  limit,
+  startAfter,
+  orderBy,
+  getCountFromServer,
+  writeBatch, // ADD THIS IMPORT
+  updateDoc,  // ADD THIS IMPORT
 } from 'firebase/firestore';
 import { addTripForCurrentUser } from './Itinerary';
 import { fetchCloudinaryImages, getImageForDestination } from "./image-router";
 import { trackDestinationAdded } from './itinerary_Stats';
+
+// ==================== CACHING LAYER ====================
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const destinationCache = {
+  data: null,
+  timestamp: null,
+  totalCount: null, // NEW: Cache for total count
+  isValid() {
+    return this.data && this.timestamp && (Date.now() - this.timestamp < CACHE_DURATION);
+  },
+  set(data) {
+    this.data = data;
+    this.timestamp = Date.now();
+    // Also cache to localStorage for persistence across sessions
+    try {
+      localStorage.setItem('destinations_cache', JSON.stringify({
+        data,
+        timestamp: this.timestamp
+      }));
+    } catch (e) {
+      console.warn('Failed to cache to localStorage:', e);
+    }
+  },
+  get() {
+    // Try memory cache first
+    if (this.isValid()) return this.data;
+    
+    // Try localStorage cache
+    try {
+      const cached = localStorage.getItem('destinations_cache');
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp < CACHE_DURATION) {
+          this.data = data;
+          this.timestamp = timestamp;
+          return data;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to read cache from localStorage:', e);
+    }
+    
+    return null;
+  },
+  clear() {
+    this.data = null;
+    this.timestamp = null;
+    try {
+      localStorage.removeItem('destinations_cache');
+    } catch (e) {}
+  }
+};
 
 // ADD logActivity function HERE at the top
 async function logActivity(text, icon = "🔵") {
@@ -34,166 +93,222 @@ async function logActivity(text, icon = "🔵") {
       icon,
       timestamp: new Date().toISOString(),
     });
-    console.log("Activity logged:", text); // Debug log
   } catch (error) {
     console.error("Error logging activity:", error);
   }
 }
-// Helper to get image URL for a destination
-export async function fetchAllCloudinaryImages() {
-  const snap = await getDocs(collection(db, "cloudinaryImages"));
-  const map = {};
-  snap.forEach(doc => {
-    map[doc.id] = doc.data().url;
-  });
-  return map; // { "Bat-ongan Cave": "https://...", ... }
+
+// Fix 1: Import 'query' from firebase/firestore (it's already imported as fsQuery)
+async function ensureCollectionExists(path) {
+  try {
+    const colRef = collection(db, path);
+    const snap = await getDocs(fsQuery(colRef, limit(1))); // CHANGE: query -> fsQuery
+    if (snap.empty) {
+      const tempRef = doc(colRef);
+      await setDoc(tempRef, { _placeholder: true, createdAt: serverTimestamp() });
+      await deleteDoc(tempRef);
+    }
+  } catch (error) {
+    console.warn(`Could not ensure collection ${path} exists:`, error);
+  }
+}
+
+// ADD THIS HELPER FUNCTION after ensureCollectionExists
+async function checkMiniPlannerAchievement(user) {
+  try {
+    if (!user?.uid) return;
+    
+    const sharedQuery = fsQuery(
+      collection(db, 'sharedItineraries'),
+      fsWhere('sharedBy', '==', user.uid)
+    );
+    
+    const snapshot = await getDocs(sharedQuery);
+    
+    if (snapshot.size >= 1) {
+      await unlockAchievement(11, "Mini Planner");
+    }
+  } catch (error) {
+    console.error('Error checking Mini Planner achievement:', error);
+  }
 }
 
 export default function Bookmarks2() {
-  // Firestore-backed destinations and bookmarks
   const [destinations, setDestinations] = useState([]);
   const navigate = useNavigate();
   const [bookmarks, setBookmarks] = useState(new Set());
   const [currentUser, setCurrentUser] = useState(null);
-  // NEW: page loading state
   const [isLoading, setIsLoading] = useState(true);
   const [cloudImages, setCloudImages] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [regions, setRegions] = useState([]);
+  const [firebaseImages, setFirebaseImages] = useState([]);
 
   // UI state
   const [query, setQuery] = useState('');
-  const [sortBy, setSortBy] = useState('name'); // name | rating | price
+  const [sortBy, setSortBy] = useState('name');
   const [selectedRegions, setSelectedRegions] = useState(new Set());
-  const [selectedPrice, setSelectedPrice] = useState(null); // less | expensive | null
+  const [selectedPrice, setSelectedPrice] = useState(null);
   const [selectedCats, setSelectedCats] = useState(new Set());
   const [modalOpen, setModalOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [addingTripId, setAddingTripId] = useState(null);
-  const [addedTripId, setAddedTripId] = useState(null); // NEW: show ✔ after success
+  const [addedTripId, setAddedTripId] = useState(null);
 
-  // NEW: ratings state
-  const [ratingsByDest, setRatingsByDest] = useState({}); // { [destId]: { avg, count } }
-  const [userRating, setUserRating] = useState(0);        // current user's rating for selected
+  const [ratingsByDest, setRatingsByDest] = useState({});
+  const [userRating, setUserRating] = useState(0);
   const [savingRating, setSavingRating] = useState(false);
-
-  // NEW: bookmark toggle pending (modal)
   const [bookmarking, setBookmarking] = useState(false);
 
-  // NEW: pagination
+  // ==================== PAGINATION STATE ====================
   const [page, setPage] = useState(1);
-  const pageSize = 12;
+  const pageSize = 21;
+  const [lastVisible, setLastVisible] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
 
-  // NEW: destinations viewed by the user (for achievement tracking)
   const [viewedDestinations, setViewedDestinations] = useState(new Set());
+  const [copyingId, setCopyingId] = useState(null);
 
-  // 1) Load only CMS-published destinations (status in ['published','PUBLISHED'])
+  // ==================== OPTIMIZED: Load destinations with caching ====================
   useEffect(() => {
-    setIsLoading(true);
-    const q = fsQuery(
-      collection(db, 'destinations'),
-      fsWhere('status', 'in', ['published', 'PUBLISHED'])
-    );
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
+    let unsubscribe = null;
+    
+    const loadDestinations = async () => {
+      setIsLoading(true);
+      
+      // Check cache first
+      const cached = destinationCache.get();
+      if (cached) {
+        console.log('✅ Using cached destinations');
+        setDestinations(cached);
+        setIsLoading(false);
+        return;
+      }
+
+      console.log('📥 Fetching destinations from Firestore');
+      
+      // Fetch ALL published destinations (no limit for now since we're caching)
+      const q = fsQuery(
+        collection(db, 'destinations'),
+        fsWhere('status', 'in', ['published', 'PUBLISHED'])
+        // REMOVED: orderBy and limit - fetch all at once
+      );
+
+      try {
+        const snap = await getDocs(q);
         const items = snap.docs.map((x) => ({
           id: x.id,
           ...x.data(),
-          category: x.data().category || '', // Always use category string
-          // categories: undefined, // Optionally remove categories if present
+          category: x.data().category || '',
         }));
+        
+        console.log(`✅ Loaded ${items.length} destinations from Firestore`);
+        
+        destinationCache.set(items);
         setDestinations(items);
         setIsLoading(false);
-      },
-      (err) => {
-        console.error('Failed to load published destinations:', err);
+      } catch (err) {
+        console.error('Failed to load destinations:', err);
         setDestinations([]);
         setIsLoading(false);
       }
-    );
-    return () => unsub();
-  }, [setCurrentUser]);
+    };
 
-  // 2) Listen to auth and the current user's bookmarks
-  useEffect(() => {
-    let unsubUserDoc = null;
-    let unsubAuth = () => {}; // <-- ensure unsubAuth is always a function
-    unsubAuth = auth.onAuthStateChanged(async (user) => {
-      setCurrentUser(user || null);
-      if (user) {
-        const userRef = doc(db, 'userBookmarks', user.uid);
-
-            try {
-              const snap = await getDoc(userRef);
-              if (!snap.exists()) {
-                await setDoc(
-                  userRef,
-                  {
-                    userId: user.uid,
-                    bookmarks: [],
-                    createdAt: serverTimestamp(),
-                    updatedAt: serverTimestamp(),
-                  },
-                  { merge: true }
-                );
-              }
-            } catch (e) {
-              console.warn('userBookmarks bootstrap skipped:', e.code || e.message);
-            }
-
-            unsubUserDoc = onSnapshot(
-              userRef,
-              (s) => {
-                const ids = (s.exists() ? s.data().bookmarks : []) || [];
-                setBookmarks(new Set(ids));
-              },
-              (err) => {
-                console.warn('userBookmarks listener error:', err.code || err.message);
-                setBookmarks(new Set());
-              }
-            );
-          } else {
-            setBookmarks(new Set());
-            if (unsubUserDoc) unsubUserDoc();
-          }
-        });
-      // fallback no-op if not a function
+    loadDestinations();
 
     return () => {
-      if (unsubUserDoc) unsubUserDoc();
-      if (typeof unsubAuth === 'function') unsubAuth();
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+  // ==================== OPTIMIZED: Load regions and categories separately ====================
+  useEffect(() => {
+  loadFiltersData();
+}, []);
+
+  // Fetch regions and categories from Firestore
+  useEffect(() => {
+    async function fetchFirebaseImages() {
+      try {
+        const snap = await getDocs(collection(db, 'photos'));
+        const imgs = snap.docs.map(doc => ({
+          name: doc.data().name,
+          publicId: doc.data().publicId, // <-- fetch publicId
+          url: doc.data().url
+        })).filter(img => img.name && img.url);
+        setFirebaseImages(imgs);
+      } catch (e) {
+        console.warn('Failed to fetch images from Firestore:', e);
+        setFirebaseImages([]);
+      }
+    }
+    fetchFirebaseImages();
+  }, []);
+
+  // ==================== OPTIMIZED: Load bookmarks (remove real-time listener) ====================
+  useEffect(() => {
+    const loadUserBookmarks = async (user) => {
+      if (!user) {
+        setBookmarks(new Set());
+        return;
+      }
+
+      try {
+        const userRef = doc(db, 'userBookmarks', user.uid);
+        const snap = await getDoc(userRef);
+        
+        if (!snap.exists()) {
+          await setDoc(
+            userRef,
+            {
+              userId: user.uid,
+              bookmarks: [],
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+          setBookmarks(new Set());
+        } else {
+          const ids = snap.data().bookmarks || [];
+          setBookmarks(new Set(ids));
+        }
+      } catch (e) {
+        console.warn('Failed to load bookmarks:', e);
+        setBookmarks(new Set());
+      }
+    };
+
+    const unsubAuth = auth.onAuthStateChanged(async (user) => {
+      setCurrentUser(user || null);
+      await loadUserBookmarks(user);
+    });
+
+    return () => {
       if (typeof unsubAuth === 'function') unsubAuth();
     };
-  }, [setCurrentUser]);
+  }, []);
 
   // Regions/Categories derived from Firestore data
-const regions = useMemo(
-  () => [...new Set(destinations.map((d) => d.region || '').filter(Boolean))]
-    .sort((a, b) => String(a).localeCompare(String(b))),
-  [destinations]
-);
+  const categoriesMemo = useMemo(() => {
+    const s = new Set();
+    destinations.forEach((d) => (d.categories || []).forEach((c) => s.add(c || '')));
+    return [...s].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+  }, [destinations]);
 
-const categoriesMemo = useMemo(() => {
-  const s = new Set();
-  destinations.forEach((d) => (d.categories || []).forEach((c) => s.add(c || '')));
-  return [...s].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
-}, [destinations]);
-
-const allCategories = useMemo(() => {
-  const set = new Set();
-  categories.forEach((c) => set.add(c));
-  (categoriesMemo || []).forEach((c) => set.add(c));
-  return Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
-}, [categories, categoriesMemo]);
+  const allCategories = useMemo(() => {
+    const set = new Set();
+    categories.forEach((c) => set.add(c));
+    (categoriesMemo || []).forEach((c) => set.add(c));
+    return Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
+  }, [categories, categoriesMemo]);
   
   // Filter + sort
   const filtered = useMemo(() => {
-    // Guard: keep only truly published docs
     let list = destinations.filter(
       (d) => String(d.status || '').toUpperCase() === 'PUBLISHED'
     );
     
-    // FIX: Change 'q' to 'query.toLowerCase()' 
     list = list.filter((d) => {
       const q = query.toLowerCase();
       const matchesQ =
@@ -220,12 +335,11 @@ const allCategories = useMemo(() => {
     return list;
   }, [destinations, query, selectedRegions, selectedPrice, selectedCats, sortBy]);
 
-  // NEW: clamp/reset page when filters/sort change
   useEffect(() => {
     setPage(1);
   }, [query, selectedRegions, selectedPrice, selectedCats, sortBy]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const totalPages = totalCount ? Math.max(1, Math.ceil(totalCount / pageSize)) : 999;
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
@@ -237,76 +351,41 @@ const allCategories = useMemo(() => {
   const canPrev = page > 1;
   const canNext = page < totalPages;
 
-  // NEW: helper to navigate pages and reliably scroll to top
   const goToPage = (target) => {
     setPage(target);
-
-    // Desired top position
-    const top = 0;
-
-    // Try multiple scroll targets (window, document, main app container)
-    try {
-      if (typeof window !== 'undefined' && window.scrollTo) {
-        // smooth when possible
-        try {
-          window.scrollTo({ top, behavior: 'smooth' });
-        } catch {
-          window.scrollTo(0, top);
-        }
-      }
-
-      // Also try documentElement/body (some setups use these)
-      if (document.documentElement && 'scrollTop' in document.documentElement) {
-        document.documentElement.scrollTop = top;
-      }
-      if (document.body && 'scrollTop' in document.body) {
-        document.body.scrollTop = top;
-      }
-
-      // If your app uses a scrollable container, scroll that too
-      const appEl = document.querySelector('.App') || document.querySelector('#root') || null;
-      if (appEl && typeof appEl.scrollTo === 'function') {
-        try {
-          appEl.scrollTo({ top, behavior: 'smooth' });
-        } catch {
-          appEl.scrollTop = top;
-        }
-      }
-    } catch (e) {
-      // final fallback
-      try { window.scrollTo(0, 0); } catch {}
-    }
-
-    // Remove focus from the pager button so the browser won't keep it visible
-    // (do after a short delay so we don't interrupt the click)
-    try {
-      setTimeout(() => {
-        const active = document.activeElement;
-        if (active && typeof active.blur === 'function') active.blur();
-      }, 50);const n = (x) => parseInt((x.price || '0').replace(/[^\d]/g, ''), 10) || 0;
-    } catch {}
+    // Immediately scroll to top - use multiple methods for browser compatibility
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    
+    // Also force scroll after React renders the new page
+    setTimeout(() => {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    }, 0);
   };
 
-  // REPLACE existing Pager with one that uses goToPage
-  const Pager = () => (
-    <div className="bp2-pager" style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', margin: '12px 0' }}>
-      <div className="bp2-pager-info" style={{ color: '#475569', fontSize: 14 }}>
-        {filtered.length ? `Showing ${start + 1}–${end} of ${filtered.length}` : 'No destinations found'}
+  const Pager = () => {
+    const start = (page - 1) * pageSize + 1;
+    const end = Math.min(start + pageSize, filtered.length);
+    
+    return (
+      <div className="bp2-pager" style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', margin: '12px 0' }}>
+        <div className="bp2-pager-info" style={{ color: '#475569', fontSize: 14 }}>
+          {filtered.length > 0 ? `Showing ${start}–${end} results` : 'No destinations found'}
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="next-page-btn" onClick={() => goToPage(1)} disabled={!canPrev}>« First</button>
+          <button className="next-page-btn" onClick={() => goToPage(page - 1)} disabled={!canPrev}>‹ Prev</button>
+          <span style={{ padding: '6px 10px', fontSize: 14 }}>Page {page}</span>
+          <button className="next-page-btn" onClick={() => goToPage(page + 1)} disabled={!canNext}>Next ›</button>
+          <button className="next-page-btn" onClick={() => goToPage(page + 10)} disabled={!canNext}>Last »</button>
+        </div>
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button className="next-page-btn" onClick={() => goToPage(1)} disabled={!canPrev} aria-label="First page">« First</button>
-        <button className="next-page-btn" onClick={() => goToPage(Math.max(1, page - 1))} disabled={!canPrev} aria-label="Previous page">‹ Prev</button>
-        <span style={{ padding: '6px 10px', fontSize: 14 }}>{page} / {totalPages}</span>
-        <button className="next-page-btn" onClick={() => goToPage(Math.min(totalPages, page + 1))} disabled={!canNext} aria-label="Next page">Next ›</button>
-        <button className="next-page-btn" onClick={() => goToPage(totalPages)} disabled={!canNext} aria-label="Last page">Last »</button>
-      </div>
-    </div>
-  );
+    );
+  };
 
-  // All categories (from Firestore + CMS) for filter list
-  
-
-  // Helpers
   const toggleSet = (setter, value) =>
     setter((prev) => {
       const n = new Set(prev);
@@ -314,8 +393,8 @@ const allCategories = useMemo(() => {
       return n;
     });
 
-  // 3) Toggle bookmark in Firestore for current user
-  const toggleBookmark = async (dest) => {
+  // ==================== OPTIMIZED: Toggle bookmark (remove listener, use optimistic updates) ====================
+  const toggleBookmark = useCallback(async (dest) => {
     const user = auth.currentUser;
     if (!user) {
       alert('Please sign in to bookmark destinations.');
@@ -327,6 +406,17 @@ const allCategories = useMemo(() => {
     const bookmarkDocRef = doc(db, 'users', user.uid, 'bookmarks', dest.id);
 
     const isBookmarked = bookmarks.has(dest.id);
+
+    // Optimistic update
+    setBookmarks(prev => {
+      const newSet = new Set(prev);
+      if (isBookmarked) {
+        newSet.delete(dest.id);
+      } else {
+        newSet.add(dest.id);
+      }
+      return newSet;
+    });
 
     try {
       await setDoc(
@@ -348,11 +438,9 @@ const allCategories = useMemo(() => {
       if (isBookmarked) {
         try {
           await deleteDoc(bookmarkDocRef);
-          // Log activity for removing bookmark
           await logActivity(`Removed "${dest.name}" from bookmarks`, "💔");
-          console.log('✅ Activity logged: Removed bookmark');
         } catch (e) {
-          console.warn('delete users/{uid}/bookmarks/{destId} skipped:', e.code || e.message);
+          console.warn('delete bookmark skipped:', e.code || e.message);
         }
       } else {
         try {
@@ -362,6 +450,7 @@ const allCategories = useMemo(() => {
               destId: dest.id,
               name: dest.name,
               region: dest.region || '',
+              location: dest.location || '',
               rating: dest.rating ?? null,
               price: dest.price || '',
               priceTier: dest.priceTier || null,
@@ -376,33 +465,55 @@ const allCategories = useMemo(() => {
             { merge: true }
           );
           
-          // Log activity for adding bookmark
           await logActivity(`Bookmarked "${dest.name}"`, "⭐");
-          console.log('✅ Activity logged: Added bookmark');
           
-          // Check if this is the first bookmark
           const userBookmarksSnap = await getDoc(listRef);
           const bookmarksList = userBookmarksSnap.data()?.bookmarks || [];
           if (bookmarksList.length === 1) {
             await unlockAchievement(2, "First Bookmark");
           }
         } catch (e) {
-          console.warn('upsert users/{uid}/bookmarks/{destId} skipped:', e.code || e.message);
+          console.warn('upsert bookmark skipped:', e.code || e.message);
         }
       }
     } catch (e) {
-      console.error('Toggle bookmark failed:', e.code || e.message);
+      console.error('Toggle bookmark failed:', e);
+      // Rollback optimistic update
+      setBookmarks(prev => {
+        const newSet = new Set(prev);
+        if (isBookmarked) {
+          newSet.add(dest.id);
+        } else {
+          newSet.delete(dest.id);
+        }
+        return newSet;
+      });
       alert('Could not update bookmark. Please try again.');
     }
-  };
+  }, [bookmarks]);
 
-  // Average ratings loader for current page
+    function getFirebaseImageForDestination(firebaseImages, destName) {
+      if (!destName) return null;
+      const normalized = destName.trim().toLowerCase();
+      const found = firebaseImages.find(img =>
+        (img.name && img.name.trim().toLowerCase() === normalized) ||
+        (img.publicId && img.publicId.trim().toLowerCase() === normalized)
+      );
+      return found && found.url ? found.url : null;
+    }
+
+  // ==================== OPTIMIZED: Load ratings only for visible items ====================
   useEffect(() => {
     let cancelled = false;
-    async function loadAverages() {
+    
+    const loadAverages = async () => {
+      const itemsNeedingRatings = pageItems.filter(d => !ratingsByDest[d.id]);
+      
+      if (itemsNeedingRatings.length === 0) return;
+
       try {
         const entries = await Promise.all(
-          pageItems.map(async (d) => {
+          itemsNeedingRatings.map(async (d) => {
             try {
               const rsnap = await getDocs(collection(db, 'destinations', d.id, 'ratings'));
               let sum = 0, count = 0;
@@ -413,62 +524,63 @@ const allCategories = useMemo(() => {
               const avg = count ? sum / count : 0;
               return [d.id, { avg, count }];
             } catch (err) {
-              // Permission denied -> treat as no ratings
-              console.warn('ratings read skipped for', d.id, err.code || err.message);
+              console.warn('ratings read skipped for', d.id);
               return [d.id, { avg: 0, count: 0 }];
             }
           })
         );
-        if (!cancelled) setRatingsByDest((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+        
+        if (!cancelled) {
+          setRatingsByDest((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+        }
       } catch (e) {
-        console.error('Load averages failed', e.code || e.message);
-        console.error('Load averages failed', e.code || e.message);
+        console.error('Load averages failed', e);
       }
-    }
-    if (pageItems.length) loadAverages();
+    };
+    
+    loadAverages();
+    
     return () => { cancelled = true; };
-  }, [pageItems]);
+  }, [pageItems]); // Only load for current page
 
   const avgText = (id) => {
     const r = ratingsByDest[id];
     return r && r.count > 0 ? r.avg.toFixed(1) : '—';
   };
 
-  // Add this useEffect to load viewed destinations from Firestore when user logs in
-useEffect(() => {
-  if (!currentUser) {
-    setViewedDestinations(new Set());
-    return;
-  }
-
-  const loadViewedDestinations = async () => {
-    try {
-      const viewedRef = doc(db, 'users', currentUser.uid, 'viewedDestinations', 'data');
-      const viewedSnap = await getDoc(viewedRef);
-      
-      if (viewedSnap.exists()) {
-        const viewedIds = viewedSnap.data().destinationIds || [];
-        setViewedDestinations(new Set(viewedIds));
-      }
-    } catch (error) {
-      console.warn('Could not load viewed destinations:', error);
+  // Load viewed destinations
+  useEffect(() => {
+    if (!currentUser) {
+      setViewedDestinations(new Set());
+      return;
     }
-  };
 
-  loadViewedDestinations();
-}, [currentUser]);
+    const loadViewedDestinations = async () => {
+      try {
+        const viewedRef = doc(db, 'users', currentUser.uid, 'viewedDestinations', 'data');
+        const viewedSnap = await getDoc(viewedRef);
+        
+        if (viewedSnap.exists()) {
+          const viewedIds = viewedSnap.data().destinationIds || [];
+          setViewedDestinations(new Set(viewedIds));
+        }
+      } catch (error) {
+        console.warn('Could not load viewed destinations:', error);
+      }
+    };
+
+    loadViewedDestinations();
+  }, [currentUser]);
 
   const openDetails = async (d) => {
     setSelected(d);
     setModalOpen(true);
 
-    // Track this destination as viewed
     const newViewed = new Set(viewedDestinations);
     const wasNew = !newViewed.has(d.id);
     newViewed.add(d.id);
     setViewedDestinations(newViewed);
 
-    // Save to Firestore if user is logged in and this is a new view
     if (currentUser && wasNew) {
       try {
         const viewedRef = doc(db, 'users', currentUser.uid, 'viewedDestinations', 'data');
@@ -485,16 +597,14 @@ useEffect(() => {
       }
     }
 
-    // Check if user has viewed 10 different destinations
     if (newViewed.size >= 10) {
       try {
         await unlockAchievement(7, "Explorer at Heart");
       } catch (error) {
-        console.error("Error unlocking Explorer at Heart achievement:", error);
+        console.error("Error unlocking achievement:", error);
       }
     }
 
-    // Load user's rating for this destination
     try {
       const u = auth.currentUser;
       if (!u) { setUserRating(0); return; }
@@ -505,7 +615,6 @@ useEffect(() => {
       setUserRating(0);
     }
 
-    // Ensure we have averages for this selected item
     if (!ratingsByDest[d.id]) {
       try {
         const rsnap = await getDocs(collection(db, 'destinations', d.id, 'ratings'));
@@ -520,19 +629,6 @@ useEffect(() => {
         console.error('Load selected avg failed', e);
       }
     }
-
-    // Fetch packingSuggestions from Firestore if available
-    try {
-      const destSnap = await getDoc(doc(db, 'destinations', d.id, 'packingSuggestions'));
-      if (destSnap.exists()) {
-        const data = destSnap.data();
-        if (data.packingSuggestions) {
-          setSelected(prev => ({ ...prev, packingSuggestions: data.packingSuggestions }));
-        }
-      }
-    } catch (e) {
-      console.warn('Could not fetch packingSuggestions:', e.message);
-    }
   };
 
   const closeDetails = () => {
@@ -541,49 +637,22 @@ useEffect(() => {
     setUserRating(0);
   };
 
-// NEW: modal bookmark click with optimistic UI + rollback on error
   const handleModalBookmarkClick = async () => {
     const user = auth.currentUser;
     if (!user) { alert('Please sign in to bookmark destinations.'); return; }
     if (!selected) return;
 
-    const id = selected.id;
-    const wasBookmarked = bookmarks.has(id);
-    
-    // Check if this will be the first bookmark
-    const isFirstBookmark = !wasBookmarked && bookmarks.size === 0;
-
-    // Optimistic UI
-    setBookmarks((prev) => {
-      const n = new Set(prev);
-      wasBookmarked ? n.delete(id) : n.add(id);
-      return n;
-    });
-
     setBookmarking(true);
     try {
-      await toggleBookmark(selected); // This will log the activity
-      
-      // If adding first bookmark, unlock achievement
-      if (isFirstBookmark) {
-        await unlockAchievement(2, "First Bookmark");
-      }
-      
+      await toggleBookmark(selected);
     } catch (e) {
-      // Rollback on failure
-      setBookmarks((prev) => {
-        const n = new Set(prev);
-        wasBookmarked ? n.add(id) : n.delete(id);
-        return n;
-      });
-      console.error('Bookmark toggle from modal failed:', e);
+      console.error('Bookmark toggle failed:', e);
       alert('Could not update bookmark. Please try again.');
     } finally {
       setBookmarking(false);
     }
   };
 
-  // NEW: save rating for current user and refresh average
   const rateSelected = async (value) => {
     const u = auth.currentUser;
     if (!u) { alert('Please sign in to rate.'); return; }
@@ -596,12 +665,11 @@ useEffect(() => {
         value: v,
         userId: u.uid,
         updatedAt: serverTimestamp(),
-        name: selected.name || '', // <-- add name
+        name: selected.name || '',
       }, { merge: true });
 
       setUserRating(v);
 
-      // --- Write user's rating to users/{uid}/ratings/{destId} ---
       const userRatingRef = doc(db, 'users', u.uid, 'ratings', String(selected.id));
       await setDoc(
         userRatingRef,
@@ -609,13 +677,11 @@ useEffect(() => {
           destId: String(selected.id),
           value: v,
           updatedAt: serverTimestamp(),
-          name: selected.name || '', // <-- add name
+          name: selected.name || '',
         },
         { merge: true }
       );
-      // --- END NEW ---
 
-      // Recompute average
       const rsnap = await getDocs(collection(db, 'destinations', String(selected.id), 'ratings'));
       let sum = 0, count = 0;
       rsnap.forEach((r) => { const val = Number(r.data()?.value) || 0; if (val > 0) { sum += val; count += 1; } });
@@ -624,14 +690,13 @@ useEffect(() => {
       setRatingsByDest((m) => ({ ...m, [selected.id]: { avg, count } }));
       setDestinations((prev) => prev.map((x) => (x.id === selected.id ? { ...x, rating: avg } : x)));
     } catch (e) {
-      console.error('Save rating failed:', e.code, e.message);
+      console.error('Save rating failed:', e);
       alert('Failed to save rating.');
     } finally {
       setSavingRating(false);
     }
   };
 
-  // Add to Trip handler (stub implementation)
   const addToTripFromBookmarks = async (dest) => {
     setAddingTripId(dest.id);
     try {
@@ -641,17 +706,34 @@ useEffect(() => {
         return;
       }
 
-      // Existing behavior: write to itinerary collection using helper
-      await addTripForCurrentUser(dest);
+      const destinationData = {
+        id: dest.id,
+        name: dest.name || '',
+        display_name: dest.name || '',
+        region: dest.region || '',
+        location: dest.location || '',
+        description: dest.description || '',
+        lat: dest.lat || dest.latitude,
+        lon: dest.lon || dest.longitude,
+        place_id: dest.place_id || dest.id,
+        rating: dest.rating || 0,
+        price: dest.price || '',
+        priceTier: dest.priceTier || null,
+        tags: Array.isArray(dest.tags) ? dest.tags : [],
+        categories: Array.isArray(dest.categories) ? dest.categories : [],
+        bestTime: dest.bestTime || '',
+        image: dest.image || '',
+      };
 
-      // Track destination added to itinerary
+      await addTripForCurrentUser(destinationData);
+
       await trackDestinationAdded(user.uid, {
         id: dest.id,
         name: dest.name,
         region: dest.region,
+        location: dest.location,
       });
 
-      // small parser reused here to store same estimatedExpenditure in users/{uid}/trips
       const parseEstimatedFromPrice = (p) => {
         if (p == null) return 0;
         if (typeof p === "number") return p;
@@ -664,7 +746,6 @@ useEffect(() => {
       };
       const estimated = parseEstimatedFromPrice(dest?.price ?? dest?.priceTier ?? dest?.estimatedExpenditure ?? dest?.budget);
 
-      // NEW: also save to users/{uid}/trips/{destId} with estimatedExpenditure
       try {
         await setDoc(
           doc(db, 'users', user.uid, 'trips', String(dest.id)),
@@ -672,6 +753,7 @@ useEffect(() => {
             destId: String(dest.id),
             name: dest.name || '',
             region: dest.region || '',
+            location: dest.location || '',
             rating: dest.rating ?? null,
             price: dest.price || '',
             priceTier: dest.priceTier || null,
@@ -693,7 +775,7 @@ useEffect(() => {
       setAddedTripId(dest.id);
       setTimeout(() => {
         setAddedTripId(null);
-        navigate('/itinerary'); // Route for "My Trips"
+        navigate('/itinerary');
       }, 600);
     } catch (e) {
       if (e?.message === 'AUTH_REQUIRED') {
@@ -707,12 +789,11 @@ useEffect(() => {
     }
   };
 
-  // NEW: peso formatter (non-destructive)
   const formatPeso = (v) => {
     if (v === null || v === undefined) return '—';
     if (typeof v === 'number') return '₱' + v.toLocaleString();
     if (typeof v === 'string') {
-      if (v.trim().startsWith('₱')) return v;            // already formatted
+      if (v.trim().startsWith('₱')) return v;
       const digits = v.replace(/[^\d]/g, '');
       return digits ? '₱' + Number(digits).toLocaleString() : v;
     }
@@ -723,20 +804,164 @@ useEffect(() => {
     fetchCloudinaryImages().then(setCloudImages);
   }, []);
 
-  // Fetch categories from Firestore (collection: 'categories')
-  useEffect(() => {
-    async function fetchCategories() {
-      try {
-        const snap = await getDocs(collection(db, 'categories'));
-        const cats = snap.docs.map(doc => doc.data().name).filter(Boolean);
-        setCategories(cats.sort((a, b) => a.localeCompare(b)));
-      } catch (e) {
-        console.warn('Failed to load categories:', e.message);
-        setCategories([]);
-      }
+  // Replace the loadFiltersData function (around line 285-310) with this optimized version:
+
+  const loadFiltersData = async () => {
+    try {
+      // DON'T fetch all destinations for regions!
+      // Instead, use a hardcoded list or a separate 'regions' collection
+      
+      // Option 1: Hardcoded regions (BEST - 0 reads)
+      const philippineRegions = [
+        'CAR - Cordillera Administrative Region',
+        'NCR - National Capital Region',
+        'Region I - Ilocos Region',
+        'Region II - Cagayan Valley',
+        'Region III - Central Luzon',
+        'Region IV-A - CALABARZON',
+        'Region IV-B - MIMAROPA',
+        'Region V - Bicol Region',
+        'Region VI - Western Visayas',
+        'Region VII - Central Visayas',
+        'Region VIII - Eastern Visayas',
+        'Region IX - Zamboanga Peninsula',
+        'Region X - Northern Mindanao',
+        'Region XI - Davao Region',
+        'Region XII - SOCCSKSARGEN',
+        'Region XIII - Caraga',
+        'BARMM - Bangsamoro Autonomous Region in Muslim Mindanao'
+      ];
+      
+      setRegions(philippineRegions);
+
+      // Load categories from the 'categories' collection (much smaller, ~10-20 reads)
+      const categoriesSnap = await getDocs(collection(db, 'categories'));
+      const cats = categoriesSnap.docs.map(doc => doc.data().name).filter(Boolean);
+      setCategories(cats.sort((a, b) => a.localeCompare(b)));
+      
+      console.log(`✅ Loaded ${philippineRegions.length} regions and ${cats.length} categories`);
+    } catch (e) {
+      console.warn('Failed to load filters:', e);
+      setRegions([]);
+      setCategories([]);
     }
-    fetchCategories();
+  };
+
+  // ==================== CACHING: Load total count ====================
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTotalCount = async () => {
+      // Get total count ONLY when needed
+      let count = destinationCache.totalCount;
+
+      // Only fetch total count if we don't have it cached
+      if (!count) {
+        console.log('📊 Fetching total count (one-time)...');
+        
+        try {
+          // Use aggregation query (1 read instead of 900+)
+          const countQuery = fsQuery(
+            collection(db, 'destinations'),
+            fsWhere('status', 'in', ['published', 'PUBLISHED'])
+          );
+          
+          // Get count without fetching all documents
+          const snapshot = await getCountFromServer(countQuery);
+          count = snapshot.data().count;
+          
+          destinationCache.totalCount = count;
+          
+          // Cache to localStorage
+          try {
+            localStorage.setItem('destinations_total_count', JSON.stringify({
+              count,
+              timestamp: Date.now()
+            }));
+          } catch (e) {
+            console.warn('Failed to cache count');
+          }
+          
+          console.log(`📊 Total count: ${count}`);
+        } catch (error) {
+          console.error('Failed to get count:', error);
+          // Fallback: estimate based on page size
+          count = pageSize * 50; // Rough estimate
+        }
+      }
+
+      // When filters are active, estimate count instead of fetching
+      if (selectedRegions.size > 0 || selectedPrice || selectedCats.size > 0 || query) {
+        // Don't fetch exact count for filtered results
+        // Instead, use "Showing X results" without total
+        count = null; // Will show "Showing 1-21 of many results"
+      }
+
+      if (!cancelled) {
+        setTotalCount(count);
+      }
+    };
+
+    loadTotalCount();
+
+    return () => { cancelled = true; };
+  }, [query, selectedRegions, selectedPrice, selectedCats, sortBy]); // Rerun if filters or sort change
+
+  // Add this useEffect after state declarations:
+  useEffect(() => {
+    // Load cached total count on mount
+    try {
+      const cached = localStorage.getItem('destinations_total_count');
+      if (cached) {
+        const { count, timestamp } = JSON.parse(cached);
+        // Use cached count if less than 1 day old
+        if (Date.now() - timestamp < 24 * 60 * 60 * 1000) {
+          destinationCache.totalCount = count;
+          setTotalCount(count);
+          console.log('✅ Loaded cached total count:', count);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load cached count');
+    }
   }, []);
+
+  // MOVE handleCopyToMyItinerary INSIDE the component (before the return statement)
+  const handleCopyToMyItinerary = useCallback(async (shared) => {
+    const user = auth.currentUser;
+    if (!user || !shared) return;
+    if (!shared.items || shared.items.length === 0) return;
+    
+    try {
+      setCopyingId(shared.id); // Now this works!
+      const batch = writeBatch(db);
+      
+      for (const it of shared.items) {
+        const { id: sharedItemId, ...payload } = it;
+        const destRef = doc(collection(db, "itinerary", user.uid, "items"));
+        batch.set(destRef, {
+          ...payload,
+          location: it.location || '',
+          importedAt: serverTimestamp(),
+          isShared: false,
+          sharedFrom: shared.id
+        });
+      }
+      
+      await batch.commit();
+      await updateDoc(doc(db, "sharedItineraries", shared.id), {
+        lastUpdated: serverTimestamp()
+      });
+      
+      alert('Itinerary copied successfully!');
+      navigate('/itinerary');
+    } catch (e) {
+      console.error("Copy to My Itinerary failed:", e);
+      alert("Failed to copy. Please try again.");
+    } finally {
+      setCopyingId(null); // Now this works too!
+    }
+  }, [navigate]);
 
   return (
     <div className="App">
@@ -879,9 +1104,7 @@ useEffect(() => {
         {/* Main Content */}
         <main className="bp2-content">
           <div className="bp2-header-row">
-            <h1 className="bp2-title">
-              Discover Philippines <span className="bp2-count-link">({filtered.length} destinations)</span>
-            </h1>
+            
             <div className="bp2-sort">
               <label htmlFor="bp2-sort-select">Sort by</label>
               <select
@@ -903,41 +1126,49 @@ useEffect(() => {
 
           <div className="grid-container">
             {pageItems.map((d) => (
+              <div className="grid-card-anim">
               <div className="grid-card" key={d.id}>
                 <div className="card-image">
                   {cloudImages.length === 0 ? (
                     <div style={{ width: "100%", height: 150, background: "#e0e7ef" }}>Loading...</div>
-                  ) : getImageForDestination(cloudImages, d.name) ? (
-                    <img
-                      src={getImageForDestination(cloudImages, d.name)}
-                      alt={d.name}
-                      className="destination-img"
-                      style={{
-                        width: "100%",
-                        height: 200,
-                        objectFit: "cover",
-                        borderRadius: "12px 12px 0 0",
-                        marginBottom: 6,
-                        background: "#e0e7ef"
-                      }}
-                    />
                   ) : (
-                    <div
-                      style={{
-                        width: "100%",
-                        height: 180,
-                        borderRadius: "12px 12px 0 0",
-                        background: "#e0e7ef",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "#94a3b8",
-                        fontSize: 32,
-                        marginBottom: 6
-                      }}
-                    >
-                      🏝️
-                    </div>
+                    (() => {
+                      const cloudUrl = getImageForDestination(cloudImages, d.name);
+                      const firebaseUrl = getFirebaseImageForDestination(firebaseImages, d.name);
+                      const imgUrl = cloudUrl || firebaseUrl;
+                      return imgUrl ? (
+                        <img
+                          src={imgUrl}
+                          alt={d.name}
+                          className="destination-img"
+                          style={{
+                            width: "100%",
+                            height: 200,
+                            objectFit: "cover",
+                            borderRadius: "12px 12px 0 0",
+                            marginBottom: 6,
+                            background: "#e0e7ef"
+                          }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: "100%",
+                            height: 180,
+                            borderRadius: "12px 12px 0 0",
+                            background: "#e0e7ef",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: "#94a3b8",
+                            fontSize: 32,
+                            marginBottom: 6
+                          }}
+                        >
+                          🏝️
+                        </div>
+                      );
+                    })()
                   )}
                   <button
                     className={`bookmark-bubble ${bookmarks.has(d.id) ? 'active' : ''}`}
@@ -978,6 +1209,7 @@ useEffect(() => {
                     View Details
                   </button>
                 </div>
+              </div>
               </div>
             ))}
           </div>
@@ -1149,6 +1381,17 @@ useEffect(() => {
                       )}
                     </div>
                   </div>
+                  
+                  <div className="trip-item">
+                    <div className="trip-label">Location</div>
+                    <div className="badge-row">
+                      {selected.location ? (
+                        <span className="badge blue">{selected.location}</span>
+                      ) : (
+                        <span className="badge blue">No location  </span>
+                      )}
+                    </div>
+                  </div>
                 </aside>
               </div>
             </div>
@@ -1159,3 +1402,208 @@ useEffect(() => {
   );
 }
 
+// Around line 420-450, update SharedEditModal form state to include location:
+export function SharedEditModal({ initial, onSave, onClose }) {
+  const [notif, setNotif] = useState("");
+  const [form, setForm] = useState({
+    name: initial?.name || "",
+    region: initial?.region || "",
+    location: initial?.location || "", // ADD THIS
+    status: initial?.status || "Upcoming",
+    arrival: initial?.arrival || "",
+    departure: initial?.departure || "",
+    transport: initial?.transport || "",
+    estimatedExpenditure: initial?.estimatedExpenditure ?? initial?.budget ?? 0,
+    accomType: initial?.accomType || "",
+    accomName: initial?.accomName || "",
+    accomNotes: initial?.accomNotes || "",
+    activities: initial?.activities || [],
+    activityDraft: "",
+    transportNotes: initial?.transportNotes || "",
+    notes: initial?.notes || "",
+  });
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setNotif("");
+    try {
+      await onSave(form);
+      setNotif("Saved successfully!");
+      setTimeout(onClose, 1000);
+    } catch (error) {
+      console.error("Save error:", error);
+      setNotif("Failed to save. Please try again.");
+    }
+  };
+
+  const modalContent = (
+    <div className="itn-modal-backdrop" onClick={onClose}>
+      <form className="itn-modal" onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
+        <div className="itn-modal-header">
+          <div className="itn-modal-title">Edit Shared Destination</div>
+          <button type="button" className="itn-close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="itn-modal-body">
+          <div className="itn-form-grid">
+            <div className="itn-form-col">
+              <div className="itn-grid">
+                <label className="itn-field">
+                  <span className="itn-label">Destination Name</span>
+                  <input
+                    className="itn-input"
+                    name="name"
+                    value={form.name}
+                    onChange={handleChange}
+                    placeholder="City or place name"
+                  />
+                </label>
+                <label className="itn-field">
+                  <span className="itn-label">Country/Region</span>
+                  <input
+                    className="itn-input"
+                    name="region"
+                    value={form.region}
+                    onChange={handleChange}
+                    placeholder="Region"
+                  />
+                </label>
+                {/* ADD THIS NEW FIELD */}
+                <label className="itn-field">
+                  <span className="itn-label">Location</span>
+                  <input
+                    className="itn-input"
+                    name="location"
+                    value={form.location}
+                    onChange={handleChange}
+                    placeholder="Specific location"
+                  />
+                </label>
+              </div>
+
+              {/* ...rest of the form stays the same... */}
+            </div>
+
+            {/* ...second column stays the same... */}
+          </div>
+        </div>
+
+        <div className="itn-modal-footer">
+          <button type="button" className="itn-btn ghost" onClick={onClose}>Cancel</button>
+          <button type="submit" className="itn-btn primary">Save Details</button>
+        </div>
+        {notif && (
+          <div style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", background: "#6c63ff", color: "#fff", padding: "8px 16px", borderRadius: 8, zIndex: 10001 }}>
+            {notif}
+          </div>
+        )}
+      </form>
+    </div>
+  );
+
+  return ReactDOM.createPortal(modalContent, document.body);
+}
+
+// Around line 700-750, update shareItinerary to include location:
+export async function shareItinerary(user, items, itemIds, friendIds) {
+  if (!user || !itemIds.length || !friendIds.length) {
+    console.error("Missing required data for sharing:", { user: !!user, itemsCount: itemIds.length, friendsCount: friendIds.length });
+    return;
+  }
+  
+  console.log("Starting share operation:", { itemIds, friendIds });
+  
+  try {
+    await ensureCollectionExists("sharedItineraries");
+    await ensureCollectionExists("notifications");
+    
+    const itemsToShare = items.filter(item => itemIds.includes(item.id));
+    const sharedDocRef = doc(collection(db, "sharedItineraries"));
+    const timestamp = serverTimestamp();
+    const sharedWithAll = Array.from(new Set([...friendIds, user.uid]));
+
+    await setDoc(sharedDocRef, {
+      sharedBy: user.uid,
+      sharedWith: sharedWithAll,
+      sharedAt: timestamp,
+      name: `Shared by ${user.displayName || user.email || 'a friend'}`,
+      itemCount: itemIds.length,
+      collaborative: true,
+      lastUpdated: timestamp,
+      owner: {
+        uid: user.uid,
+        name: user.displayName || user.email || 'Unknown',
+        photoURL: user.photoURL || null
+      }
+    });
+
+    const batch = writeBatch(db);
+    const idMap = [];
+    for (const item of itemsToShare) {
+      const { id: originalId, ...rest } = item;
+      const itemRef = doc(collection(db, "sharedItineraries", sharedDocRef.id, "items"));
+      idMap.push({ originalId, sharedItemId: itemRef.id });
+      batch.set(itemRef, {
+        ...rest,
+        location: item.location || '', // ADD THIS - Ensure location is included
+        originalId,
+        sharedAt: timestamp,
+        lastEditedBy: user.uid,
+        lastEditedByName: user.displayName || user.email || 'Owner',
+        updatedAt: timestamp
+      });
+    }
+    await batch.commit();
+
+    const delBatch = writeBatch(db);
+    for (const m of idMap) {
+      delBatch.delete(doc(db, "itinerary", user.uid, "items", m.originalId));
+    }
+    await delBatch.commit();
+    console.log("Moved items to shared itinerary and removed personal copies");
+    
+    // Log activity for sharing itinerary
+    await logActivity(
+      `Shared itinerary with ${friendIds.length} friend${friendIds.length > 1 ? 's' : ''} (${itemIds.length} destination${itemIds.length > 1 ? 's' : ''})`,
+      "🔗"
+    );
+    
+    await checkMiniPlannerAchievement(user);
+    
+    const notificationBatch = writeBatch(db);
+    for (const friendId of friendIds) {
+      try {
+        const notifRef = doc(collection(db, "notifications"));
+        notificationBatch.set(notifRef, {
+          userId: friendId,
+          type: "ITINERARY_SHARED",
+          message: `${user.displayName || user.email || 'A friend'} shared an itinerary with you`,
+          read: false,
+          createdAt: timestamp,
+          data: {
+            sharedBy: user.uid,
+            sharedByName: user.displayName || user.email || 'Friend',
+            sharedById: user.uid,
+            itemCount: itemIds.length,
+            itineraryId: sharedDocRef.id
+          }
+        });
+      } catch (notifErr) {
+        console.error(`Error preparing notification: ${notifErr.message}`, notifErr);
+      }
+    }
+    
+    await notificationBatch.commit();
+    console.log(`Created notifications for ${friendIds.length} friends`);
+    console.log("Share operation completed successfully");
+    return sharedDocRef.id;
+  } catch (err) {
+    console.error("Error sharing itinerary:", err);
+    throw err;
+  }
+}
