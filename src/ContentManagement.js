@@ -1251,7 +1251,7 @@ useEffect(() => {
 });
 
 // Pagination for Destinations
-const DEST_PAGE_SIZE = 12;
+/* const DEST_PAGE_SIZE = 12;
 const [destPage, setDestPage] = useState(1);
 const [lastDestDoc, setLastDestDoc] = useState(null);
 const [hasMoreDest, setHasMoreDest] = useState(true);
@@ -1283,6 +1283,25 @@ useEffect(() => {
     setLastDestDoc(snap.docs[snap.docs.length - 1]);
   }).finally(() => setLoadingDest(false));
 }, [active, destPage]);
+*/
+
+// Add this useEffect inside ContentManagement, after your state declarations:
+
+useEffect(() => {
+  if (active !== 'destinations') return;
+  setLoadingDest(true);
+
+  // Always fetch directly from Firestore
+  getDocs(query(collection(db, 'destinations'), orderBy('name')))
+    .then((snap) => {
+      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setDestinations(items);
+    })
+    .catch((err) => {
+      console.error('Failed to fetch destinations from Firestore:', err);
+    })
+    .finally(() => setLoadingDest(false));
+}, [active]);   
 
 // Pagination for Reports
 const REPORT_PAGE_SIZE = 20;
@@ -1533,11 +1552,13 @@ useEffect(() => {
                         <button className="btn-primary-cms" onClick={openCreate} style={{ padding: '10px 16px', borderRadius: 12 }}>
                             + Add New destination
                         </button>
+                        {/*
                         {hasMoreDest && (
                           <button className="btn-secondary" onClick={() => setDestPage(destPage + 1)}>
                             Load More
                           </button>
                         )}
+                        */}
                     </div>
                 </div>
 

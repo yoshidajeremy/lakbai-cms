@@ -373,16 +373,7 @@ function parseRegionCsv(csvText) {
                                     {/* Cancel button, only show when uploading */}
                                     {uploading && (
                                         <button
-                                            style={{
-                                                marginLeft: 16,
-                                                padding: '4px 14px',
-                                                borderRadius: 6,
-                                                border: 'none',
-                                                background: '#e5e7eb',
-                                                color: '#b91c1c',
-                                                fontWeight: 700,
-                                                cursor: 'pointer'
-                                            }}
+                                            className='btn-danger'
                                             onClick={() => {
                                                 setUploading(false);
                                                 setUploadProgress(0);
