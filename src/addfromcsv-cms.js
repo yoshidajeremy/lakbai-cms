@@ -523,13 +523,8 @@ useEffect(() => {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    // Parse rating
     const ratingStr = raw.rating || raw.stars || '0';
     const rating = Math.max(0, Math.min(5, Number(ratingStr) || 0));
-
-    // Parse review (allow decimals, fallback to 0)
-    const reviewStr = raw.review || raw.reviews || '0';
-    const review = Number(reviewStr) || 0;
 
     const status = String(raw.status ?? 'draft').toLowerCase();
 
@@ -573,7 +568,6 @@ useEffect(() => {
       ...(ignoredCols.price ? {} : { priceRange: priceRaw, price: priceNum }),
       ...(ignoredCols.bestTime ? {} : { bestTime: g(effectiveAliases.bestTime || [], '') }),
       ...(ignoredCols.rating ? {} : { rating }),
-      ...(ignoredCols.reviews ? {} : { review }),
       media: {
         // Use aliases to get the image URL from the CSV/excel file
         ...(ignoredCols.image ? {} : { featuredImage: getFirstValue(raw, effectiveAliases.image || []) }),

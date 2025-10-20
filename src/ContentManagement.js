@@ -325,6 +325,7 @@ function ContentManagement() {
   const [placeInput, setPlaceInput] = useState('');
   const [editStatus, setEditStatus] = useState('active'); // NEW: settings tab state
   const [interestInput, setInterestInput] = useState('');  // NEW: inline input for Travel Interests
+const [destPage, setDestPage] = useState(1);
 
   // NEW: total images count from dest-images.json
   const totalImages = Array.isArray(destImages) ? destImages.length : 0;
@@ -809,17 +810,22 @@ useEffect(() => {
     try {
       if (editing?.id) {
         await updateDoc(doc(db, 'destinations', editing.id), payload);
-        setDestinations((prev) => prev.map((d) => (d.id === editing.id ? { ...d, ...payload, id: editing.id } : d)));
+        setDestinations((prev) => {
+          const updated = prev.map((d) => (d.id === editing.id ? { ...d, ...payload, id: editing.id } : d));
+          // Update cache
+          localStorage.setItem('destinations_cache', JSON.stringify(updated));
+          return updated;
+        });
       } else {
         const ref = await addDoc(collection(db, 'destinations'), payload);
         const newDoc = { ...payload, id: ref.id };
-        setDestinations((prev) => [...prev, newDoc]);
+        setDestinations((prev) => {
+          const updated = [...prev, newDoc];
+          localStorage.setItem('destinations_cache', JSON.stringify(updated));
+          return updated;
+        });
         setAnalytics((a) => ({ ...a, totalDestinations: (a.totalDestinations || 0) + 1 }));
       }
-      // optional localStorage fallback sync
-      try {
-        localStorage.setItem('destinations', JSON.stringify((prev => prev)(destinations)));
-      } catch {}
       closeForm();
     } catch (err) {
       console.error('Save destination failed:', err);
@@ -1250,40 +1256,26 @@ useEffect(() => {
   return statusMatch && categoryMatch && searchMatch;
 });
 
-// Pagination for Destinations
-/* const DEST_PAGE_SIZE = 12;
-const [destPage, setDestPage] = useState(1);
-const [lastDestDoc, setLastDestDoc] = useState(null);
-const [hasMoreDest, setHasMoreDest] = useState(true);
-
 useEffect(() => {
   if (active !== 'destinations') return;
   setLoadingDest(true);
 
-  // Try cache for first page
-  if (destPage === 1) {
-    const cached = JSON.parse(localStorage.getItem('destinations_page1') || '[]');
-    if (cached.length) setDestinations(cached);
-  }
-
-  let q = query(collection(db, 'destinations'), orderBy('updatedAt', 'desc'), limit(DEST_PAGE_SIZE));
-  if (lastDestDoc) {
-    q = query(collection(db, 'destinations'), orderBy('updatedAt', 'desc'), startAfter(lastDestDoc), limit(DEST_PAGE_SIZE));
-  }
-
-  getDocs(q).then((snap) => {
-    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    if (destPage === 1) {
+  // Always fetch directly from Firestore
+  getDocs(query(collection(db, 'destinations'), orderBy('name')))
+    .then((snap) => {
+      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setDestinations(items);
-      localStorage.setItem('destinations_page1', JSON.stringify(items));
-    } else {
-      setDestinations((prev) => [...prev, ...items]);
-    }
-    setHasMoreDest(items.length === DEST_PAGE_SIZE);
-    setLastDestDoc(snap.docs[snap.docs.length - 1]);
-  }).finally(() => setLoadingDest(false));
-}, [active, destPage]);
-*/
+      // Cache in localStorage
+      localStorage.setItem('destinations_cache', JSON.stringify(items));
+    })
+    .catch((err) => {
+      console.error('Failed to fetch destinations from Firestore:', err);
+      // Fallback to cache if available
+      const cached = JSON.parse(localStorage.getItem('destinations_cache') || '[]');
+      setDestinations(cached);
+    })
+    .finally(() => setLoadingDest(false));
+}, [active]);
 
 // Add this useEffect inside ContentManagement, after your state declarations:
 
@@ -1738,9 +1730,25 @@ useEffect(() => {
                                                         fontSize: 14,
                                                         boxShadow: 'none'
                                                     }}
-                                                    onClick={() => {
-                                                        setEditing(d);
+                                                    onClick={async () => {
+                                                      // Fetch latest from Firestore
+                                                      setLoadingDest(true);
+                                                      try {
+                                                        const docRef = doc(db, 'destinations', d.id);
+                                                        const snap = await getDoc(docRef);
+                                                        if (snap.exists()) {
+                                                          setEditing({ id: d.id, ...snap.data() });
+                                                        } else {
+                                                          // fallback to cached data if not found
+                                                          setEditing(d);
+                                                        }
                                                         setShowForm(true);
+                                                      } catch (err) {
+                                                        setEditing(d); // fallback to cached data
+                                                        setShowForm(true);
+                                                      } finally {
+                                                        setLoadingDest(false);
+                                                      }
                                                     }}
                                                 >
                                                     Edit
@@ -1801,7 +1809,7 @@ useEffect(() => {
                     className="form-input"
                     style={{ width: '100%', paddingLeft: 40 }}
                     placeholder="Search reports..."
-                    value={reportSearch}
+                    value={ reportSearch}
                     onChange={(e) => setReportSearch(e.target.value)}
                   />
                 </div>
