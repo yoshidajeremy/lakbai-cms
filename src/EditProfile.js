@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import axios from "axios";
 import "./EditProfile.css";
 import { doc, updateDoc } from "firebase/firestore";
-import { db, auth } from "./firebase"; // Make sure db and auth are exported from firebase.js
-import { getByTestId } from "@testing-library/react";
+import { auth, db } from './firebase'; // ensure available
+import { doc as fsDoc, getDoc, updateDoc as fsUpdateDoc, arrayRemove } from 'firebase/firestore';
 
 const interestsList = [
   { icon: "🏄‍♂️", label: "Surfer", color: "#e0f7fa" },
@@ -40,15 +40,46 @@ const EditProfile = ({ onClose, onProfileUpdate, initialData = {} }) => {
       ? initialData.interests
       : interestsList.map(i => ({ ...i, status: null }))
   );
+
+  // ADD: active interests from Firestore (used only for border + one-click removal)
+  const [activeInterests, setActiveInterests] = useState(() => {
+    const arr = Array.isArray(initialData.interests) ? initialData.interests : [];
+    const labels = arr.map(v => (typeof v === 'string' ? v : v?.label)).filter(Boolean);
+    return new Set(labels);
+  });
   const [saving, setSaving] = useState(false);
 
-  // Toggle status: null -> like (green) -> dislike (red) -> null
-  const handleInterestClick = (idx) => {
-    setInterests(interests =>
-      interests.map((i, iIdx) => {
+  // Toggle status: null -> like -> dislike -> null
+  // UPDATED: if the clicked interest is already active (has border), remove it from Firestore
+  const handleInterestClick = async (idx) => {
+    const clicked = interests[idx];
+    const label = clicked?.label;
+    if (!label) return;
+
+    // If this interest is active from Firestore, clicking removes it
+    if (activeInterests.has(label)) {
+      try {
+        const u = auth.currentUser;
+        if (!u) throw new Error('No user');
+        await fsUpdateDoc(fsDoc(db, 'users', u.uid), { interests: arrayRemove(label) });
+        setActiveInterests(prev => {
+          const next = new Set(prev);
+          next.delete(label);
+          return next;
+        });
+      } catch (err) {
+        console.error('Remove interest failed:', err);
+        alert('Failed to remove interest. Please try again.');
+      }
+      return; // do not alter like/dislike when removing active
+    }
+
+    // Otherwise keep your existing like/dislike cycling
+    setInterests(cur =>
+      cur.map((i, iIdx) => {
         if (iIdx !== idx) return i;
-        if (i.status === null) return { ...i, status: "like" };
-        if (i.status === "like") return { ...i, status: "dislike" };
+        if (i.status === null) return { ...i, status: 'like' };
+        if (i.status === 'like') return { ...i, status: 'dislike' };
         return { ...i, status: null };
       })
     );
@@ -84,37 +115,45 @@ const EditProfile = ({ onClose, onProfileUpdate, initialData = {} }) => {
       const user = auth.currentUser;
       if (!user) throw new Error("No user logged in");
 
-      // Likes and dislikes
+      // Likes and dislikes from the UI
       const likes = interests.filter(i => i.status === "like").map(i => i.label);
       const dislikes = interests.filter(i => i.status === "dislike").map(i => i.label);
 
-      // Build update object with only changed fields
+      // FINAL interests to store:
+      // - keep what is already active in Firestore (activeInterests)
+      // - plus any newly liked items from the UI
+      const finalInterests = Array.from(new Set([
+        ...Array.from(activeInterests),  // already in users/{uid}.interests (after any removals)
+        ...likes                         // new additions from this edit
+      ]));
+
       const updateData = {};
 
-      // Fix: Use 'travelerName' to match what profile.js expects
+      // travelerName and bio (unchanged)
       if (name && name.trim() !== (initialData.name || "")) {
-        updateData.travelerName = name.trim(); // Changed from 'name' to 'travelerName'
+        updateData.travelerName = name.trim();
       }
-
-      // Only update bio if it's changed
       if (bio !== (initialData.bio || "")) {
         updateData.bio = bio;
       }
 
-      // Only update profile picture if a new file was selected
+      // profile picture (unchanged)
       if (photoFile) {
         updateData.profilePicture = await uploadToCloudinary(photoFile);
       }
 
-      // Only update interests if they changed
-      if (JSON.stringify(likes) !== JSON.stringify(initialData.likes || [])) {
-        updateData.likes = likes;
+      // WRITE TO 'interests' (not 'likes')
+      // Only update if changed
+      const initialInterests = Array.isArray(initialData.interests) ? initialData.interests : [];
+      if (JSON.stringify(finalInterests) !== JSON.stringify(initialInterests)) {
+        updateData.interests = finalInterests;
       }
+
+      // Keep storing dislikes if you already use it elsewhere (non-breaking)
       if (JSON.stringify(dislikes) !== JSON.stringify(initialData.dislikes || [])) {
         updateData.dislikes = dislikes;
       }
 
-      // If no changes, just close
       if (Object.keys(updateData).length === 0) {
         if (onClose) onClose();
         setSaving(false);
@@ -123,15 +162,29 @@ const EditProfile = ({ onClose, onProfileUpdate, initialData = {} }) => {
 
       await updateDoc(doc(db, "users", user.uid), updateData);
 
-      // Call the profile update callback to trigger achievement
       if (onProfileUpdate) onProfileUpdate();
-
       if (onClose) onClose();
     } catch (err) {
       alert("Failed to save profile: " + err.message);
     }
     setSaving(false);
   };
+
+  // ADD: load the current user's interests once (keeps other logic untouched)
+  React.useEffect(() => {
+    const unsub = auth.onAuthStateChanged(async (u) => {
+      if (!u) return;
+      try {
+        const snap = await getDoc(fsDoc(db, 'users', u.uid));
+        const raw = Array.isArray(snap.data()?.interests) ? snap.data().interests : [];
+        const labels = raw.map(v => (typeof v === 'string' ? v : v?.label)).filter(Boolean);
+        setActiveInterests(new Set(labels));
+      } catch (e) {
+        console.warn('Failed to load interests:', e);
+      }
+    });
+    return () => typeof unsub === 'function' && unsub();
+  }, []);
 
   return (
     <div className="edit-profile-backdrop">
@@ -206,7 +259,7 @@ const EditProfile = ({ onClose, onProfileUpdate, initialData = {} }) => {
               <div className="edit-profile-avatar-change">Click to change photo</div>
             </div>
             <label className="edit-profile-label">
-              Travel Name
+              Traveler Name
               <input
                 type="text"
                 className="edit-profile-input"
@@ -239,40 +292,36 @@ const EditProfile = ({ onClose, onProfileUpdate, initialData = {} }) => {
                 Click each interest to like (green) or dislike (red)
               </div>
             </div>
-            <div className="edit-profile-interests-list" style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", overflowX: "hidden"}}>
+            <div className="edit-profile-interests-list" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', overflowX: 'hidden' }}>
               {interests.map((interest, idx) => {
+                const isActive = activeInterests.has(interest.label); // active from Firestore
                 let bgColor = interest.color;
-                if (interest.status === "like") bgColor = "#d1fae5"; // green
-                if (interest.status === "dislike") bgColor = "#fee2e2"; // red
+                if (interest.status === 'like') bgColor = '#d1fae5';
+                if (interest.status === 'dislike') bgColor = '#fee2e2';
                 return (
                   <div
                     key={interest.label}
-                    className="edit-profile-interest"
                     role="button"
                     tabIndex={0}
-                    aria-label={interest.label}
-                    data-testid={`button-${interest.label.replace(/\s+/g, "")}`}
+                    onClick={() => handleInterestClick(idx)}
+                    onKeyPress={(e) => { if (e.key === 'Enter' || e.key === ' ') handleInterestClick(idx); }}
+                    title={isActive ? 'Click to remove from your interests' : 'Click to like (green) or dislike (red)'}
                     style={{
                       background: bgColor,
-                      cursor: "pointer",
-                      transition: "background 0.2s",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "12px",
-                      border: interest.status ? "2px solid #6c63ff" : "2px solid transparent",
-                      minHeight: "48px",
-                      borderRadius: "12px",
-                      padding: "12px 16px",
-                      fontSize: "1.08rem",
-                      fontWeight: "500",
-                      boxShadow: "0 2px 8px rgba(108,99,255,0.07)",
-                      userSelect: "none"
+                      border: isActive ? '2px solid #6c63ff' : '2px solid transparent', // ADD border for active
+                      borderRadius: '12px',
+                      padding: '12px 16px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      cursor: 'pointer',
+                      transition: 'border-color .2s, background .2s',
+                      minHeight: 48,
+                      boxShadow: '0 2px 8px rgba(108,99,255,0.07)'
                     }}
-                    onClick={() => handleInterestClick(idx)}
-                    onKeyPress={e => { if (e.key === "Enter" || e.key === " ") handleInterestClick(idx); }}
                   >
-                    <span className="edit-profile-interest-icon">{interest.icon}</span>
-                    <span className="edit-profile-interest-label">{interest.label}</span>
+                    <span>{interest.icon}</span>
+                    <span>{interest.label}</span>
                   </div>
                 );
               })}

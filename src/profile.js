@@ -53,10 +53,11 @@ const Profile = () => {
   // const { profile } = useUser();
 
   // With this local state that mirrors context (no context setter needed)
-  const { profile: ctxProfile } = useUser();
-  const [profile, setProfile] = useState(ctxProfile || null);
+  const userContext = useUser();
+  const ctxProfile = userContext?.profile ?? null;
+  const [profile, setProfile] = useState(ctxProfile);
   useEffect(() => {
-    setProfile(ctxProfile);
+    setProfile(ctxProfile ?? null);
   }, [ctxProfile]);
 
   // Custom marker icon
@@ -116,12 +117,15 @@ const Profile = () => {
 
       setProfile((prev) => ({
         ...prev,
-        name: data.travelerName || user?.displayName || "",
-        bio: data.bio || "",
-        profilePicture: data.profilePicture || "/user.png",
-        likes: Array.isArray(data.likes) ? data.likes : [],
-        dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],
-        joined,
+        name: data.travelerName ?? prev?.travelerName ?? "",
+        bio: data.bio ?? prev?.bio ?? "",
+        profilePicture: data.profilePicture ?? prev?.profilePicture ?? "/user.png",
+        // LIVE interests from 'interests' (fallback to legacy 'likes')
+        interests: Array.isArray(data.interests)
+          ? data.interests
+          : (Array.isArray(data.likes) ? data.likes : (prev?.interests || [])),
+        likes: Array.isArray(data.likes) ? data.likes : prev?.likes || [],
+        dislikes: Array.isArray(data.dislikes) ? data.dislikes : prev?.dislikes || [],
       }));
 
       setShareCode(data.shareCode || "");
@@ -520,7 +524,7 @@ const Profile = () => {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      navigate("/");
+      navigate("/login");
     } catch (err) {
       console.error("Logout failed:", err);
     }
@@ -727,8 +731,36 @@ const Profile = () => {
     fetchCompletedDestinations();
   }, [userId]);
 
+  // Add this function:
+  async function getUserFriendsCount(uid) {
+    const snap = await getDocs(collection(db, "users", uid, "friends"));
+    return snap.size;
+  }
+
+  // In Profile, fetch and display the count:
+  useEffect(() => {
+    if (userId) {
+      getUserFriendsCount(userId).then(count =>
+        setStats(prev => ({ ...prev, friends: count }))
+      );
+    }
+  }, [userId]);
+
   return (
     <>
+      {/* Animated background elements - MORE VISIBLE */}
+      <div className="profile-bg-circle"></div>
+      <div className="profile-bg-circle"></div>
+      <div className="profile-bg-circle"></div>
+      <div className="profile-bg-circle"></div>
+      <div className="profile-bg-dots"></div>
+      <div className="profile-bg-wave"></div>
+      <div className="profile-bg-shapes">
+        <div className="profile-bg-shape"></div>
+        <div className="profile-bg-shape"></div>
+        <div className="profile-bg-shape"></div>
+      </div>
+
       <div className="profile-main">
         {/* Profile Header */}
         <div className="profile-header">
@@ -786,9 +818,9 @@ const Profile = () => {
               <span>• 🎂 Joined {profile?.joined || ""}</span>   {/* null-safe */}
             </div>
             <div className="profile-badges">
-              {(profile?.likes || []).map((like) => (
-                <div className="profile-interest profile-interest-like" key={like}>
-                  <span className="profile-interest-label">{like}</span>
+              {( (profile?.interests && profile.interests.length > 0 ? profile.interests : (profile?.likes || [])) ).map((interest) => (
+                <div className="profile-interest profile-interest-like" key={interest}>
+                  <span className="profile-interest-label">{interest}</span>
                 </div>
               ))}
               {(profile?.dislikes || []).map((dislike) => (
@@ -1674,6 +1706,23 @@ export async function unlockAchievement(achievementId, achievementName) {
       [`achievements.${achievementId}`]: true,
     });
     emitAchievement(`${achievementName} Achievement Unlocked! 🎉`);
+  }
+}
+
+// ADD THIS EXPORT - find the logActivity function and add export keyword
+export async function logActivity(text, icon = "🔵") {
+  try {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    await addDoc(collection(db, "activities"), {
+      userId: user.uid,
+      text,
+      icon,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error logging activity:", error);
   }
 }
 

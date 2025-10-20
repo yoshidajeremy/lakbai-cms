@@ -1281,3 +1281,18 @@ display:grid;place-items:center;font-size:18px
     display: none !important;
   }
 }
+
+.tag-item button {
+  background: none;
+  border: none;
+  color: inherit;      /* Matches the tag text color */
+  font-size: 14px;
+  margin-left: 6px;
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+.tag-item button:hover {
+  background: rgba(255,255,255,0.18); /* subtle hover effect */
+}

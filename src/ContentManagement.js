@@ -1431,10 +1431,9 @@ useEffect(() => {
           <button className={`sidebar-item ${active === 'images' ? 'active' : ''}`} onClick={() => setActive('images')}>
             <span className="icon">🖼️</span> <span>Images</span>
           </button>
-          {/*<button className={`sidebar-item ${active === 'settings' ? 'active' : ''}`} onClick={() => setActive('settings')}>
-            <span className="icon">⚙️</span> <span>Settings</span>
+          <button className={`sidebar-item ${active === 'dataset' ? 'active' : ''}`} onClick={() => setActive('dataset')}>
+            <span className="icon">📊</span> <span>Datasets</span>
           </button>
-          */}
         </nav>
 
         <div className="sidebar-footer">

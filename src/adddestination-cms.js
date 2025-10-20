@@ -35,7 +35,7 @@ const TagInput = ({ tags = [], onChange, placeholder }) => {
             {t}
             <button
               type="button"
-              className="tag-remove"
+              className='tag-item button'
               onClick={() => onChange((tags || []).filter((x) => x !== t))}
             >
               ×
@@ -287,6 +287,7 @@ const DestinationForm = ({ initial = null, onCancel, onSave, existingNames = [],
       description: '',
       content: '',
       packingSuggestions: '',
+      review: '',
       tags: [],
       location: '',
       price: '',
@@ -296,24 +297,25 @@ const DestinationForm = ({ initial = null, onCancel, onSave, existingNames = [],
       status: 'draft',
     };
     if (!initial) return base;
-    // Normalize category from Firestore to match dropdown
-    const category = normalizeCategory(initial.category || '');
-    // Packing suggestion logic
-    const catKey = packingKey(category);
-    const autoPacking = PACKING_TEMPLATES[catKey] || '';
-    const importedPacking = initial.packingSuggestions || initial.packing_suggestions || initial.packing || initial.content || '';
-    const packingSuggestions = importedPacking && importedPacking.trim() ? importedPacking : autoPacking;
-    return {
-      ...base,
-      ...initial,
-      category,
-      packingSuggestions,
-      media: {
-        featuredImage: initial?.media?.featuredImage || '',
-        gallery: Array.isArray(initial?.media?.gallery) ? initial.media.gallery : [],
-      },
-    };
+      // Normalize category from Firestore to match dropdown
+      const category = normalizeCategory(initial.category || '');
+      const catKey = packingKey(category);
+      const autoPacking = PACKING_TEMPLATES[catKey] || '';
+      const importedPacking = initial.packingSuggestions || initial.packing_suggestions || initial.packing || initial.content || '';
+      const packingSuggestions = importedPacking && importedPacking.trim() ? importedPacking : autoPacking;
+      return {
+        ...base,
+        ...initial,
+        review: initial.review !== undefined ? String(initial.review) : '', // <-- read review from Firebase
+        category,
+        packingSuggestions,
+        media: {
+          featuredImage: initial?.media?.featuredImage || '',
+          gallery: Array.isArray(initial?.media?.gallery) ? initial.media.gallery : [],
+        },
+      };
   });
+  
 
   // Sync local state with initial prop (especially status)
   useEffect(() => {
@@ -458,7 +460,32 @@ const DestinationForm = ({ initial = null, onCancel, onSave, existingNames = [],
     setNameError(normalizedExisting.includes(n) ? 'A destination with this name already exists.' : '');
   }, [data.name, normalizedExisting]);
 
-  // In the submit function, always save both category and categories
+  // Ratings & Reviews local state for new review
+  const [reviewRating, setReviewRating] = useState(0);
+  const [reviewText, setReviewText] = useState('');
+
+  // Add review handler
+  const handleAddReview = () => {
+    if (!reviewRating || !reviewText.trim()) {
+      showToast('Please enter a rating and review.', 'error');
+      return;
+    }
+    const newReview = {
+      user: 'Aclan Jeremy', // Replace with actual user if available
+      rating: reviewRating,
+      comment: reviewText,
+      date: new Date().toISOString(),
+    };
+    setData(d => ({
+      ...d,
+      reviews: [...(d.reviews || []), newReview]
+    }));
+    setReviewRating(0);
+    setReviewText('');
+    showToast('Review added!', 'success');
+  };
+
+  // In the submit function, include reviews in payload
   const submit = async (e) => {
     e?.preventDefault();
     if (!data.name.trim()) return alert('Please enter a destination name');
@@ -474,9 +501,11 @@ const DestinationForm = ({ initial = null, onCancel, onSave, existingNames = [],
       categories = [data.category].flat().filter(Boolean);
     }
 
-    const payload = {
+const payload = {
       ...data,
       region: region,
+      review: data.review ? Number(data.review) : 0, // <-- single number, not array
+      rating: data.rating ? Number(data.rating) : 0, // <-- decimal rating
       category: data.category || '',
       packingSuggestions: data.packingSuggestions,
       content: data.content || data.packingSuggestions,
@@ -611,32 +640,6 @@ const DestinationForm = ({ initial = null, onCancel, onSave, existingNames = [],
               className="form-input-dest"
               style={{ minHeight: 220, whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}
             />
-            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-              Auto-fills when you pick a category. Click regenerate to refresh.
-              <button
-                type="button"
-                onClick={() => {
-                  const key = packingKey(data.category);
-                  const template = PACKING_TEMPLATES[key];
-                  if (template) {
-                    setData(d => ({ ...d, packingSuggestions: template }));
-                    lastAutoRef.current = template;
-                    userEditedPackingRef.current = false;
-                  }
-                }}
-                style={{
-                  marginLeft: 8,
-                  background: '#eef2f7',
-                  border: '1px solid #d1d5db',
-                  padding: '2px 10px',
-                  borderRadius: 6,
-                  fontSize: 11,
-                  cursor: 'pointer'
-                }}
-              >
-                Regenerate
-              </button>
-            </div>
           </div>
 
           <div className="full">
@@ -724,6 +727,74 @@ const DestinationForm = ({ initial = null, onCancel, onSave, existingNames = [],
               ))}
             </select>
           </div>
+
+          {/* --- Ratings & Reviews Section --- */}
+<div className="full">
+  <div style={{ display: 'flex', gap: 15, alignItems: 'center', marginBottom: 12 }}>
+    <div style={{ flex: 1 }}>
+      <span style={{ display: 'block', marginBottom: 6, color: '#6b7280', fontSize: 13 }}>Rating</span>
+      <div style={{ position: 'relative' }}>
+        <span
+          style={{
+            position: 'absolute',
+            left: 12,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            color: '#6b7280',
+            fontWeight: 600,
+            fontSize: 14,
+            fontStyle: 'inherit'
+          }}
+        >
+        </span>
+        <input
+          type="number"
+          min={0}
+          max={5}
+          step="0.1"
+          value={data.rating || ''}
+          onChange={e => setData({ ...data, rating: e.target.value })}
+          placeholder="0-5 (decimals allowed)"
+          className="form-input-dest"
+          style={{
+            width: '100%',
+            fontSize: 14,
+            borderRadius: 8,
+            border: '1px solid #eef2f7',
+            background: '#f9fafb',
+            height: 40,
+            outline: 'none'
+          }}
+        />
+      </div>
+    </div>
+    <div style={{ flex: 1 }}>
+      <span style={{ display: 'block', marginBottom: 6, color: '#6b7280', fontSize: 13 }}>Review</span>
+        <input
+          type="number"
+          min={0}
+          max={99999}
+          step={1}
+          value={data.review || ''}
+          onChange={e => setData({ ...data, review: e.target.value.replace(/[^\d]/g, '') })}
+          placeholder="Enter a number"
+          className="form-input-dest"
+          style={{
+            width: '100%',
+            fontSize: 14,
+            borderRadius: 8,
+            border: '1px solid #eef2f7',
+            background: '#f9fafb',
+            height: 40,
+            outline: 'none'
+          }}
+        />
+    </div>
+  </div>
+  {/* List reviews */}
+</div>
+          {/* --- End Ratings & Reviews --- */}
+
         </div>
       )}
 
