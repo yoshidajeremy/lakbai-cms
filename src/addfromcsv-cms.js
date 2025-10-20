@@ -112,6 +112,8 @@ const REQUIRED = {
   price: 'Price',              // NEW
   bestTime: 'Best Time to Visit',
   image: 'Image URL',        // not strictly required, but recommended
+  reviews: 'Reviews',
+  rating: 'Rating',
 };
 
 
@@ -127,6 +129,8 @@ const ALIASES = {
   price: ['price', 'pricerange', 'budget', 'cost', 'amount'], // NEW
   bestTime: ['besttime', 'besttimetovisit', 'season'],
   image: ['image', 'imageurl', 'featuredimage', 'cover', 'photo', 'picture'],
+  reviews: ['review', 'reviews'], // <-- add plural here
+  rating: ['rating', 'stars'],
 };
 
 // Build a quick lookup set of normalized header keys
@@ -354,6 +358,8 @@ useEffect(() => {
     { key: 'bestTime', label: 'Best Time to Visit' },
     { key: 'price', label: 'Price' },
     { key: 'image', label: 'Image URL' },
+    { key: 'reviews', label: 'Reviews' },
+    { key: 'rating', label: 'Rating' },
   ];
 
   // State for ignored columns
@@ -517,8 +523,13 @@ useEffect(() => {
       .map((s) => s.trim())
       .filter(Boolean);
 
+    // Parse rating
     const ratingStr = raw.rating || raw.stars || '0';
     const rating = Math.max(0, Math.min(5, Number(ratingStr) || 0));
+
+    // Parse review (allow decimals, fallback to 0)
+    const reviewStr = raw.review || raw.reviews || '0';
+    const review = Number(reviewStr) || 0;
 
     const status = String(raw.status ?? 'draft').toLowerCase();
 
@@ -561,7 +572,8 @@ useEffect(() => {
       ...(ignoredCols.region ? {} : { region: g(effectiveAliases.region || [], '') }),
       ...(ignoredCols.price ? {} : { priceRange: priceRaw, price: priceNum }),
       ...(ignoredCols.bestTime ? {} : { bestTime: g(effectiveAliases.bestTime || [], '') }),
-      rating,
+      ...(ignoredCols.rating ? {} : { rating }),
+      ...(ignoredCols.reviews ? {} : { review }),
       media: {
         // Use aliases to get the image URL from the CSV/excel file
         ...(ignoredCols.image ? {} : { featuredImage: getFirstValue(raw, effectiveAliases.image || []) }),
