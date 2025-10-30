@@ -1,4 +1,7 @@
 {
+  "functions": {
+    "source": "functions"
+  },
   "hosting": {
     "public": "public",
     "ignore": [
@@ -8,12 +11,31 @@
     ],
     "rewrites": [
       {
-        "source": "**",
+        "source": "functions",
         "destination": "/index.html"
+      },
+      {
+        "source": "/api/**",
+        "function": "api"
       }
     ]
   },
   "firestore": {
     "rules": "firestore.rules"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8080
+    },
+    "functions": {
+      "port": 5001
+    },
+    "hosting": {
+      "port": 5000
+    },
+    "ui": {
+      "enabled": true
+    },
+    "singleProjectMode": true
   }
 }

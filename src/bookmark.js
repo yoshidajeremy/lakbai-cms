@@ -11,6 +11,8 @@ import { unlockAchievement } from './profile';
 import { addTripForCurrentUser } from './Itinerary';
 import { trackDestinationAdded } from './itinerary_Stats';
 import destImages from './dest-images.json';
+import { fetchCloudinaryImages, getImageForDestination } from "./image-router";
+import { breakdown } from './rules';
 
 // Add this helper function after the imports
 async function logActivity(text, icon = "🔵") {
@@ -35,6 +37,8 @@ function Bookmark() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('recent');
+  const [selectedFares, setSelectedFares] = useState([]); // For fare checkboxes
+  const [selectedCard, setSelectedCard] = useState(null);
 
   // Add-to-Trip state
   const [addingTripId, setAddingTripId] = useState(null);
@@ -58,6 +62,12 @@ function Bookmark() {
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [isClearingAll, setIsClearingAll] = useState(false);
 
+  const [reviewsByDest, setReviewsByDest] = useState({});
+  const [ratingsCountByDest, setRatingsCountByDest] = useState({});
+  const [cloudImages, setCloudImages] = useState([]);
+  const [firebaseImages, setFirebaseImages] = useState([]);
+  const [userReviewsCountByDest, setUserReviewsCountByDest] = useState({});
+
   // NEW: app-themed error toast state
   const [errorMsg, setErrorMsg] = useState('');
   const errorTimerRef = useRef(null);
@@ -73,6 +83,112 @@ function Bookmark() {
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current); // NEW: clear toast timer
     };
+  }, []);
+
+    useEffect(() => {
+      if (!modalOpen || !selected) return;
+  
+      async function fetchReviewCount() {
+        try {
+          const docRef = doc(db, 'destinations', selected.id,);
+          const snap = await getDoc(docRef);
+          if (snap.exists()) {
+            const review = snap.data().review;
+            setReviewsByDest(prev => ({
+              ...prev,
+              [selected.id]: typeof review === 'number' ? review : 0
+            }));
+          } else {
+            setReviewsByDest(prev => ({
+              ...prev,
+              [selected.id]: 0
+            }));
+          }
+        } catch (e) {
+          setReviewsByDest(prev => ({
+            ...prev,
+            [selected.id]: 0
+          }));
+        }
+      }
+  
+      fetchReviewCount();
+    }, [modalOpen, selected]);
+
+  useEffect(() => {
+  if (!modalOpen || !selected) return;
+
+  async function fetchRatingsCount() {
+    try {
+      const ratingsSnap = await getDocs(collection(db, 'destinations', selected.id, 'ratings'));
+      setRatingsCountByDest(prev => ({
+        ...prev,
+        [selected.id]: ratingsSnap.size || 0
+      }));
+    } catch (e) {
+      setRatingsCountByDest(prev => ({
+        ...prev,
+        [selected.id]: 0
+      }));
+    }
+  }
+
+  fetchRatingsCount();
+}, [modalOpen, selected]);
+    
+    const formatPackingSuggestions = (text) => {
+    if (!text) return "No packing suggestions available.";
+    
+    // Split by bullet points (•, -, or *)
+    const lines = text
+      .split(/[•\-*]/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+    
+    if (lines.length === 0) return "No packing suggestions available.";
+    
+    return lines;
+  };
+
+  useEffect(() => {
+  if (!modalOpen || !selected) return;
+  async function fetchUserReviewsCount() {
+    try {
+      const reviewsSnap = await getDocs(collection(db, 'destinations', selected.id, 'reviews'));
+      setUserReviewsCountByDest(prev => ({
+        ...prev,
+        [selected.id]: reviewsSnap.size || 0
+      }));
+    } catch (e) {
+      setUserReviewsCountByDest(prev => ({
+        ...prev,
+        [selected.id]: 0
+      }));
+    }
+  }
+  fetchUserReviewsCount();
+}, [modalOpen, selected]);
+
+  useEffect(() => {
+    async function fetchFirebaseImages() {
+      try {
+        const snap = await getDocs(collection(db, 'photos'));
+        const imgs = snap.docs.map(doc => ({
+          name: doc.data().name,
+          publicId: doc.data().publicId, // <-- fetch publicId
+          url: doc.data().url
+        })).filter(img => img.name && img.url);
+        setFirebaseImages(imgs);
+      } catch (e) {
+        console.warn('Failed to fetch images from Firestore:', e);
+        setFirebaseImages([]);
+      }
+    }
+    fetchFirebaseImages();
+  }, []);
+
+  useEffect(() => {
+    fetchCloudinaryImages().then(setCloudImages);
   }, []);
 
   useEffect(() => {
@@ -109,6 +225,65 @@ function Bookmark() {
     };
   }, [currentUser]);
 
+  const fareOptions = [
+  { type: 'sea', label: '₱500 - ₱850+ (Sea Travel: short routes)', value: 'sea-short' },
+  { type: 'sea', label: '₱1,100 - ₱7,100+ (Sea Travel: long routes)', value: 'sea-long' },
+  { type: 'air', label: '₱1,500 - ₱4,000+ (Air Travel: short routes)', value: 'air-short' },
+  { type: 'air', label: '₱2,500 - ₱8,600+ (Air Travel: long routes)', value: 'air-long' },
+  ];
+
+    const getFareLabel = (val) => fareOptions.find(f => f.value === val)?.label || '';
+
+    // Compute the highest fare selected
+  const selectedFareAmounts = selectedFares
+    .map(val => {
+      const label = getFareLabel(val);
+      return parseFareRange(label);
+    })
+    .filter(Boolean);
+
+  const totalSelectedFare = selectedFareAmounts.length > 0
+    ? selectedFareAmounts.reduce((sum, v) => sum + v, 0)
+    : 0;
+
+    function parseFareRange(str) {
+    // Example: "₱2,500 - ₱5,000+ (long routes)"
+    const match = str.match(/₱([\d,]+)\s*-\s*₱([\d,]+)/);
+    if (!match) return 0;
+    // Return the higher value as number
+    return Number(match[2].replace(/,/g, ''));
+  }
+  const getTotalPrice = (basePrice) => {
+    let base = 0;
+    if (typeof basePrice === 'number') base = basePrice;
+    else if (typeof basePrice === 'string') {
+      const digits = basePrice.replace(/[^\d]/g, '');
+      base = digits ? Number(digits) : 0;
+    }
+    return base + totalSelectedFare;
+  };
+
+  const formatPeso = (v) => {
+    if (v === null || v === undefined) return '—';
+    if (typeof v === 'number') return '₱' + v.toLocaleString();
+    if (typeof v === 'string') {
+      if (v.trim().startsWith('₱')) return v;
+      const digits = v.replace(/[^\d]/g, '');
+      return digits ? '₱' + Number(digits).toLocaleString() : v;
+    }
+    return '—';
+  };
+
+  function getBreakdown(price) {
+    if (!price) return [];
+    // Remove non-digits and leading ₱, commas, spaces
+    const digits = String(price).replace(/[^\d]/g, '');
+    if (!digits) return [];
+    const key = `P${digits}`;
+    return breakdown[key] || [];
+  }
+
+
   // Read ONLY current user's bookmarks collection and merge with destination data if needed
   const fetchBookmarkedDestinations = async (uid) => {
     try {
@@ -143,7 +318,10 @@ function Bookmark() {
           return merged;
         })
       );
-      setItems(rows.filter(Boolean));
+      
+      const validRows = rows.filter(Boolean);
+      
+      setItems(validRows);
     } catch (e) {
       // console.error('Error fetching current user bookmarks:', e);
       showError('Failed to load your bookmarks.');
@@ -224,6 +402,7 @@ function Bookmark() {
       setIsClearingAll(false);
     }
   };
+  
 
   // Derived stats
   const stats = useMemo(() => {
@@ -280,12 +459,13 @@ function Bookmark() {
     if (!u) { alert('Please sign in to add to My Trips.'); return; }
     setAddingTripId(dest.id);
     try {
-      // Prepare the destination object with all required fields
+      // Prepare the destination object with all required fields INCLUDING LOCATION
       const destinationData = {
         id: dest.id,
         name: dest.name || '',
         display_name: dest.name || '', // Itinerary expects display_name
         region: dest.region || dest.locationRegion || '',
+        location: dest.location || '', // ADD THIS - Include location
         description: dest.description || '',
         lat: dest.lat || dest.latitude,
         lon: dest.lon || dest.longitude,
@@ -299,6 +479,8 @@ function Bookmark() {
         image: dest.image || '',
       };
 
+      console.log("[Bookmark] Adding to trip with location:", destinationData.location); // DEBUG
+
       await addTripForCurrentUser(destinationData);
       
       // Track destination added to itinerary
@@ -306,6 +488,7 @@ function Bookmark() {
         id: dest.id,
         name: dest.name,
         region: dest.region || dest.locationRegion,
+        location: dest.location, // ADD THIS
         latitude: dest.lat || dest.latitude,
         longitude: dest.lon || dest.longitude,
       });
@@ -336,6 +519,7 @@ function Bookmark() {
             destId: String(dest.id),
             name: dest.name || '',
             region: dest.region || dest.locationRegion || '',
+            location: dest.location || '', // ADD THIS - Save location to trips collection
             rating: dest.rating ?? null,
             price: dest.price || '',
             priceTier: dest.priceTier || null,
@@ -350,6 +534,7 @@ function Bookmark() {
           },
           { merge: true }
         );
+        console.log("[Bookmark] Saved to trips with location:", dest.location); // DEBUG
       } catch (e) {
         console.warn('users/{uid}/trips write skipped:', e.code || e.message);
       }
@@ -450,6 +635,7 @@ function Bookmark() {
       setSavingRating(false);
     }
   };
+  
 
   // Two-step confirm remove for Bookmarked button
   const handleBookmarkedClick = async () => {
@@ -553,11 +739,15 @@ function Bookmark() {
     });
 
   // Helper to get image URL by destination name
-  const getImageForDestination = (name) => {
-    if (!name) return undefined;
-    const found = destImages.find(img => img.name.trim().toLowerCase() === name.trim().toLowerCase());
-    return found ? found.url : undefined;
-  };
+const getImageForDestination = (name) => {
+  if (typeof name !== "string") return undefined;
+  const found = destImages.find(
+    img =>
+      typeof img.name === "string" &&
+      img.name.trim().toLowerCase() === name.trim().toLowerCase()
+  );
+  return found ? found.url : undefined;
+};
 
   // Fetch and attach ratings for all bookmarks after loading items
   useEffect(() => {
@@ -589,6 +779,30 @@ function Bookmark() {
     if (items.length > 0) fetchAllRatings();
     // eslint-disable-next-line
   }, [items]);
+
+  // Add this useEffect after your other useEffect hooks (around line 180, after the ratings fetch effect)
+  useEffect(() => {
+    const cardsContainer = document.querySelector('.bookmarks-grid');
+    if (cardsContainer) {
+      cardsContainer.style.zoom = '100%';
+    }
+    
+    return () => {
+      if (cardsContainer) {
+        cardsContainer.style.zoom = '100%';
+      }
+    };
+  }, [sorted]); // Re-run when sorted changes
+
+  function getFirebaseImageForDestination(firebaseImages, destName) {
+    if (!destName) return null;
+    const normalized = destName.trim().toLowerCase();
+    const found = firebaseImages.find(img =>
+      (img.name && img.name.trim().toLowerCase() === normalized) ||
+      (img.publicId && img.publicId.trim().toLowerCase() === normalized)
+    );
+    return found && found.url ? found.url : null;
+  }
 
   return (
     <div className="App bm-page" aria-busy={loading}>
@@ -707,9 +921,16 @@ function Bookmark() {
             >
               {/* Top art */}
               <div className="bm-card-hero">
-                {d.image && (
+              {cloudImages.length === 0 ? (
+                <div style={{ width: "100%", height: 150, background: "#e0e7ef" }}>Loading...</div>
+              ) : (
+                (() => {
+                  const cloudUrl = getImageForDestination(cloudImages, d.name);
+                  const firebaseUrl = getFirebaseImageForDestination(firebaseImages, d.name);
+                  const imgUrl = cloudUrl || firebaseUrl;
+                  return imgUrl ? (
                   <img
-                    src={d.image}
+                    src={imgUrl}
                     alt={d.name}
                     className="bm-card-img"
                     style={{
@@ -722,38 +943,40 @@ function Bookmark() {
                       background: '#eee'
                     }}
                   />
-                )}
-                <div className="bm-saved-badge">Saved {fmtSaved(d.savedAt)}</div>
-                <button
-                  className="bm-heart-bubble"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    triggerCardPop(d.id);
-                    beginRemove(d.id);
-                    
-                    // Get destination name for activity log BEFORE removing
-                    const destName = d.name || "destination";
-                    
-                    try {
-                      await removeBookmark(d.id);
-                      // Activity is already logged inside removeBookmark
-                    } finally {
-                      endRemove(d.id);
-                    }
-                  }}
-                  aria-label="Remove from bookmarks"
-                  title="Remove"
-                >
-                  ❤️
-                </button>
-              </div>
+                ) : null;
+            })()
+            )}
+            </div>
+            <div className="bm-saved-badge">Saved {fmtSaved(d.savedAt)}</div>
+              <button
+                className="bm-heart-bubble"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  triggerCardPop(d.id);
+                  beginRemove(d.id);
+                  
+                  // Get destination name for activity log BEFORE removing
+                  const destName = d.name || "destination";
+                  
+                  try {
+                    await removeBookmark(d.id);
+                    // Activity is already logged inside removeBookmark
+                  } finally {
+                    endRemove(d.id);
+                  }
+                }}
+                aria-label="Remove from bookmarks"
+                title="Remove"
+              >
+                ❤️
+              </button>
 
               {/* Content */}
               <div className="bm-card-body">
                 <div className="bm-card-head">
                   <h3 className="bm-card-title">{d.name}</h3>
                   <div className="bm-card-rating" title="Average Rating">
-                    <span>⭐</span> {ratingsByDest[d.id]?.avg?.toFixed(1) || '—'}
+                    <span>⭐</span> {Number(d.rating || 0) > 0 ? Number(d.rating).toFixed(1) : '0'}
                   </div>
                 </div>
 
@@ -772,6 +995,7 @@ function Bookmark() {
                     <div className="bm-info-label1">Price:</div>
                     <div className="bm-pill">{d.price ?? '—'}</div>
                   </div>
+                  {/* REMOVED LOCATION FROM CARD - Only shows in details modal */}
                 </div>
 
                 <div className="bm-tags">
@@ -795,15 +1019,13 @@ function Bookmark() {
                   <button
                     className="itn-btn danger"
                     onClick={async () => {
-                      triggerCardPop(d.id);       // quick bump
-                      beginRemove(d.id);          // start pulse
+                      triggerCardPop(d.id);
+                      beginRemove(d.id);
                       
-                      // Get destination name for activity log BEFORE removing
                       const destName = d.name || "destination";
                       
                       try {
                         await removeBookmark(d.id);
-                        // Activity is already logged inside removeBookmark
                       } finally {
                         endRemove(d.id);
                       }
@@ -811,7 +1033,7 @@ function Bookmark() {
                     disabled={removingIds[d.id] === true}
                     aria-busy={removingIds[d.id] === true}
                   >
-                    <span>🗑️</span> Remove
+                    <span className="bm-trash-responsive">🗑️</span> <span className='bm-remove-text'>Remove</span>
                   </button>
                 </div>
               </div>
@@ -824,12 +1046,36 @@ function Bookmark() {
       {modalOpen && selected && (
         <div className="bm-modal-backdrop" onClick={closeDetails}>
           <div className="bm-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <button className="bm-modal-close" onClick={closeDetails} aria-label="Close details">✕</button>
+            <button className="bm-modal-close" onClick={closeDetails} aria-label="Close">✕</button>
 
-            <div className="bm-modal-hero">
-              <div className="bm-modal-sky" />
-              <div className="bm-modal-wave" />
-            </div>
+              <div className="bm-modal-hero">
+              {cloudImages.length === 0 ? (
+                <div style={{ width: "100%", background: "#e0e7ef", borderRadius: 16  }} />
+              ) : (
+                (() => {
+                const cloudUrl = getImageForDestination(cloudImages, selected.name);
+                const firebaseUrl = getFirebaseImageForDestination(firebaseImages, selected.name);
+                const imgUrl = cloudUrl || firebaseUrl;
+                return imgUrl ? (
+                  <img
+                    src={imgUrl}
+                    alt={selected.name}
+                    className="bm-modal-img"
+                    style={{
+                      width: '100%',
+                      maxHeight: 300,
+                      objectFit: 'cover',
+                      borderTopLeftRadius: 10,
+                      borderTopRightRadius: 10,
+                      background: '#eee'
+                    }}
+                  />
+                ) : (
+                  <div className="bm-modal-sky" />
+                );
+            })()
+            )}
+          </div>
 
             <div className="bm-modal-body">
               <div className="bm-modal-main">
@@ -844,10 +1090,23 @@ function Bookmark() {
                     <span className="star">⭐</span>
                     {(ratingsByDest[selected.id]?.count ?? 0) > 0
                       ? ratingsByDest[selected.id].avg.toFixed(1)
-                      : '—'} <span className="muted">(Average Rating)</span>
+                      : '0'} <span className="muted">(Average Rating)</span>
                   </div>
+                    <span className="muted">
+                      ({ratingsCountByDest[selected.id] !== undefined
+                        ? ratingsCountByDest[selected.id]
+                        : 0} ratings)
+                    </span>
+                    <span className="label">
+                      Reviews: {
+                        userReviewsCountByDest[selected.id] !== undefined
+                          ? userReviewsCountByDest[selected.id]
+                          : 0
+                      }
+                    </span>
+
                   <div className="bm-user-rating">
-                    <span className="label">Your Rating:</span>
+                    <span className="label">Rating:</span>
                     <div className="bm-stars" aria-label="Your Rating">
                       {[1,2,3,4,5].map((v) => (
                         <button
@@ -875,14 +1134,151 @@ function Bookmark() {
                     ))}
                   </div>
                 </section>
+                <div className="section-title">Price Breakdown:</div>
+                <div style={{ fontWeight: '300', fontStyle: 'italic', justifyContent: 'left', textAlign: 'left', marginBottom: '10px' }}>Price may vary on different factors</div>
+                <div className="breakdown-box">
+                {(() => {
+                  // Use budget if available, otherwise use price
+                  const budgetOrPrice = selected.budget || selected.price;
+                  if (!budgetOrPrice) return null;
+
+                  const breakdownArr = getBreakdown(budgetOrPrice);
+                  if (!breakdownArr.length) return <span>No breakdown available.</span>;
+                  return (
+                    <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6', justifyContent: 'left', textAlign: 'left' }}>
+                      {breakdownArr.map((item, i) => (
+                        <li key={i}>{item}</li>
+                      ))}
+                    </ul>
+                  );
+                })()}
+                </div>
+
+                <div className="section-title">Additional Fees:</div>
+                <div style={{ fontWeight: '300', fontStyle: 'italic', justifyContent: 'left', textAlign: 'left', marginBottom: '10px' }}>Price may vary on different class</div>
+                <div className="breakdown-box" style={{textAlign: 'left'}}>
+                  {/* NEW: Fare checkboxes */}
+                  <div style={{ marginBottom: 10 }}>
+                    {fareOptions.map(opt => (
+                      <label key={opt.value} style={{ display: 'block', marginBottom: 2, fontWeight: 'normal', fontSize: 14 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedFares.includes(opt.value)}
+                          onChange={e => {
+                            setSelectedFares(prev => {
+                              if (e.target.checked) return [...prev, opt.value];
+                              return prev.filter(v => v !== opt.value);
+                            });
+                          }}
+                        />
+                        <span style={{ marginLeft: 6 }}>{opt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {selected && (
+                  <div style={{ marginBottom: 24 }}>
+                    <div className="section-title" style={{ marginBottom: 8 }}>User Reviews</div>
+                    <ReviewsList destId={selected.id} currentUser={currentUser} />
+                  </div>
+                )}
+                
+                <div className="section-title">Write a Review</div>
+                <div
+                  className="review-box"
+                  style={{
+                    width: '100%',          // fill available width
+                    gridColumn: '1 / -1',   // span all columns of the parent grid
+                    marginBottom: 18,
+                    zIndex: 1
+                  }}
+                >
+                <WriteReview
+                  destId={selected.id}
+                  user={currentUser}
+                  onReviewSaved={() => {
+                    // Optionally reload reviews or show a message
+                    // Refresh user reviews count after submit
+                    (async () => {
+                      try {
+                        const reviewsSnap = await getDocs(collection(db, 'destinations', selected.id, 'reviews'));
+                        setUserReviewsCountByDest(prev => ({
+                          ...prev,
+                          [selected.id]: reviewsSnap.size || 0
+                        }));
+                      } catch (e) {}
+                    })();
+                  }}
+                />
+                </div>
 
                 <section>
                   <h3 className="bm-section-title">Packing Suggestions</h3>
-                  <div className="bm-pack-card">
-                    {selected.packing || 'Swimwear, sunscreen, light clothing, waterproof bag, snorkeling gear'}
+                  <div className="packing-box">
+                    {(() => {
+                      if (!selected) return <div className="packing-empty">No packing suggestions available.</div>;
+
+                      let raw = selected.packingSuggestions || selected.packing || "";
+                      if (Array.isArray(raw) && raw.length > 0) {
+                        return (
+                          <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6', textAlign: 'left' }}>
+                            {raw.map((s, i) => <li key={i}>{s}</li>)}
+                          </ul>
+                        );
+                      }
+                      if (typeof raw === "string" && raw.trim().length > 0) {
+                        // Split by line or bullet for display
+                        const lines = raw.split(/[\n•\-*]/).map(l => l.trim()).filter(Boolean);
+                        if (lines.length > 0) {
+                          return (
+                            <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6', textAlign: 'left' }}>
+                              {lines.map((s, i) => <li key={i}>{s}</li>)}
+                            </ul>
+                          );
+                        }
+                      }
+
+                      const { category: packingCategory } = require('./rules');
+                      let cats =
+                        Array.isArray(selected.category)
+                          ? selected.category
+                          : Array.isArray(selected.categories)
+                          ? selected.categories
+                          : typeof selected.category === "string"
+                          ? [selected.category]
+                          : typeof selected.categories === "string"
+                          ? [selected.categories]
+                          : [];
+
+                      let found = [];
+                      for (let c of cats) {
+                        if (!c) continue;
+                        const key = c.trim().toLowerCase();
+                        if (packingCategory[key]) {
+                          found = packingCategory[key];
+                          break;
+                        }
+                        const singular = key.endsWith("s") ? key.slice(0, -1) : key;
+                        if (packingCategory[singular]) {
+                          found = packingCategory[singular];
+                          break;
+                        }
+                      }
+                      if (found.length > 0) {
+                        return (
+                          <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6', textAlign: 'left' }}>
+                            {found.map((s, i) => <li key={i}>{s}</li>)}
+                          </ul>
+                        );
+                      }
+
+                      return <div className="packing-empty">No packing suggestions available.</div>;
+                    })()}
                   </div>
                 </section>
               </div>
+              
 
               <aside className="bm-modal-aside">
                 <div className="bm-info-panel">
@@ -891,7 +1287,10 @@ function Bookmark() {
                   <div className="bm-info-row">
                     <div className="bm-info-key">Price:</div>
                     <div className="bm-info-val">
-                      <span className="chip-green">{selected.price ?? '—'}</span>
+                      <span className="chip-green">
+                        {selectedFares.length > 0
+                        ? `₱${getTotalPrice(selected.price).toLocaleString()}`
+                        : formatPeso(selected.price)}</span>
                     </div>
                   </div>
 
@@ -900,12 +1299,24 @@ function Bookmark() {
                     <div className="bm-info-val">{selected.bestTime || selected.best_time || '—'}</div>
                   </div>
 
+                  {/* ADD THIS NEW SECTION FOR LOCATION */}
+                  {selected.location && (
+                    <div className="bm-info-row">
+                      <div className="bm-info-key">Location:</div>
+                      <div className="bm-info-val">
+                        <span className="badge blue">{selected.location}</span>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="bm-info-row">
                     <div className="bm-info-key">Categories:</div>
                     <div className="bm-info-val">
-                      {(selected.categories || selected.tags || []).map((c, i) => (
-                        <span key={i} className="bm-chip soft">{c}</span>
-                      ))}
+                      {selected.category ? (
+                        <span className="badge purple">{selected.category}</span>
+                      ) : (
+                        <span className="badge purple">No category</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1023,3 +1434,331 @@ function Bookmark() {
 }
 
 export default Bookmark;
+
+function WriteReview({ destId, user, onReviewSaved }) {
+  const [review, setReview] = useState('');
+  const [star, setStar] = useState(0); // NEW: star rating state
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState('');
+  const [error, setError] = useState('');
+  const [alreadyReviewed, setAlreadyReviewed] = useState(false);
+
+  useEffect(() => {
+    let ignore = false;
+    async function checkExistingReview() {
+      if (!user || !destId) {
+        setAlreadyReviewed(false);
+        return;
+      }
+      try {
+        const reviewDoc = await getDoc(doc(db, "destinations", String(destId), "reviews", user.uid));
+        if (!ignore) setAlreadyReviewed(reviewDoc.exists());
+      } catch {
+        if (!ignore) setAlreadyReviewed(false);
+      }
+    }
+    checkExistingReview();
+    return () => { ignore = true; };
+  }, [user, destId, success]);
+
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  setSaving(true);
+  setError('');
+  setSuccess('');
+  try {
+    if (!user) throw new Error("You must be signed in to write a review.");
+    if (!review.trim()) throw new Error("Review cannot be empty.");
+    if (star < 1 || star > 5) throw new Error("Please select a star rating.");
+    if (alreadyReviewed) throw new Error("You have already submitted a review for this destination.");
+    const reviewData = {
+      userId: user.uid,
+      userName: user.displayName || user.email || "Anonymous",
+      review: review.trim(),
+      rating: star, // NEW: save star rating
+      createdAt: new Date().toISOString(),
+    };
+    // Save review
+    await setDoc(
+      doc(db, "destinations", String(destId), "reviews", user.uid),
+      reviewData,
+      { merge: true }
+    );
+    // Save rating in ratings subcollection (for aggregation)
+    await setDoc(
+      doc(db, "destinations", String(destId), "ratings", user.uid),
+      {
+        value: star,
+        userId: user.uid,
+        updatedAt: serverTimestamp(),
+        name: user.displayName || user.email || "Anonymous",
+      },
+      { merge: true }
+    );
+    setSuccess("Review submitted!");
+    setReview('');
+    setStar(0);
+    if (onReviewSaved) onReviewSaved();
+  } catch (err) {
+    setError(err.message || "Failed to submit review.");
+    console.error("Firestore error:", err);
+    console.log("destId:", destId);
+    console.log("user:", user);
+  } finally {
+    setSaving(false);
+  }
+};
+
+  if (alreadyReviewed && !success) {
+    return (
+      <div style={{ color: "#0862eaff", fontWeight: 500, marginBottom: 8 }}>
+        You have already submitted a review for this destination.
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <span style={{ fontWeight: 500, fontSize: 13 }}>Your Rating:</span>
+        {[1, 2, 3, 4, 5].map(n => (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setStar(n)}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: alreadyReviewed || saving ? 'not-allowed' : 'pointer',
+              fontSize: 18,
+              color: n <= star ? '#ffb300' : '#d1d5db',
+              padding: 0,
+              marginRight: 2,
+              transition: 'color 0.15s',
+              outline: 'none'
+            }}
+            disabled={alreadyReviewed || saving}
+            aria-label={`${n} star${n > 1 ? 's' : ''}`}
+          >
+            ★
+          </button>
+        ))}
+      </div>
+      <div style={{ position: 'relative' }}>
+        <textarea
+          value={review}
+          onChange={e => setReview(e.target.value)}
+          placeholder={alreadyReviewed ? "You have already submitted a review." : "Write your review here..."}
+          rows={3}
+          style={{
+            width: '100%',
+            borderRadius: 8,
+            border: '1px solid #e5e7eb',
+            padding: 12,
+            paddingRight: 50,
+            fontSize: 15,
+            resize: 'vertical'
+          }}
+          disabled={saving || alreadyReviewed}
+        />
+        <button
+          type="submit"
+          aria-label="Submit review"
+          disabled={saving || !review.trim() || alreadyReviewed || star < 1}
+          style={{
+            position: 'absolute',
+            right: 8,
+            bottom: 8,
+            width: 36,
+            height: 36,
+            borderRadius: '999px',
+            background: 'transparent',
+            border: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: saving || !review.trim() || alreadyReviewed || star < 1 ? 'not-allowed' : 'pointer',
+            opacity: saving || !review.trim() || alreadyReviewed || star < 1 ? 0.6 : 1
+          }}
+        >
+          <img src="send.png" alt="Send" style={{ width: 18, height: 18 }} />
+        </button>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {alreadyReviewed && !success && (
+          <span style={{ color: "#0862eaff" }}>You have already submitted a review for this destination.</span>
+        )}
+        {success && <span style={{ color: "#22c55e" }}>{success}</span>}
+        {error && <span style={{ color: "#e74c3c" }}>{error}</span>}
+      </div>
+    </form>
+  );
+}
+
+function ReviewsList({ destId, currentUser }) {
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [userRating, setUserRating] = useState(null);
+
+  useEffect(() => {
+    let ignore = false;
+    async function fetchReviews() {
+      setLoading(true);
+      try {
+        const snap = await getDocs(collection(db, "destinations", String(destId), "reviews"));
+        let arr = [];
+        snap.forEach(docSnap => {
+          const data = docSnap.data();
+          arr.push({
+            id: docSnap.id,
+            userName: data.userName || "Anonymous",
+            review: data.review || "",
+            createdAt: data.createdAt,
+            userId: data.userId,
+            rating: typeof data.rating === "number" ? data.rating : undefined,
+          });
+        });
+        // Sort by newest first
+        arr.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+        if (!ignore) setReviews(arr);
+      } catch {
+        if (!ignore) setReviews([]);
+      }
+      setLoading(false);
+    }
+    if (destId) fetchReviews();
+    return () => { ignore = true; };
+  }, [destId]);
+
+  // Fetch current user's star rating for this destination
+  useEffect(() => {
+    if (!currentUser || !destId) { setUserRating(null); return; }
+    let ignore = false;
+    async function fetchUserRating() {
+      try {
+        const ratingDoc = await getDoc(doc(db, "destinations", String(destId), "ratings", currentUser.uid));
+        if (!ignore) setUserRating(Number(ratingDoc.data()?.value) || null);
+      } catch {
+        if (!ignore) setUserRating(null);
+      }
+    }
+    fetchUserRating();
+    return () => { ignore = true; };
+  }, [currentUser, destId]);
+
+  if (loading) return <div style={{ color: "#888", fontSize: 14 }}>Loading reviews…</div>;
+  if (!reviews.length) return <div style={{ color: "#888", fontSize: 14 }}>No user reviews yet.</div>;
+
+  // Separate current user's review if available
+  let userReview = null;
+  let otherReviews = reviews;
+  if (currentUser) {
+    userReview = reviews.find(r => r.userId === currentUser.uid);
+    otherReviews = reviews.filter(r => r.userId !== currentUser.uid);
+  }
+
+  // Star rendering helper
+  const renderStars = (rating,) => (
+    <span style={{ marginLeft: 8, marginRight: 8 }}>
+      {Array.from({ length: 5 }).map((_, idx) => (
+        <span
+          key={idx}
+          style={{
+            color: idx < rating ? "#ffb300" : "#d1d5db",
+            fontSize: 18,
+            marginRight: 2,
+            verticalAlign: "middle",
+            fontFamily: "Arial, sans-serif", // <-- add this             // <-- and this
+          }}
+        >
+          ★
+        </span>
+      ))}
+    </span>
+  );
+
+  // Card style for all reviews
+  const cardStyle = {
+    background: "#e0f7fa",
+    border: "2px solid #38bdf8",
+    borderRadius: 16,
+    padding: "12px 16px",
+    fontSize: 18,
+    boxShadow: "0 1px 2px rgba(0,0,0,.03)",
+    marginBottom: 0,
+    marginTop: 0,
+    marginLeft: 0,
+    marginRight: 0,
+    minWidth: 220,
+    maxWidth: 600,
+    width: "100%",
+    boxSizing: "border-box"
+  };
+
+  const nameStyle = {
+    fontWeight: 700,
+    color: "#2196f3",
+    fontSize: 14,
+    marginRight: 10,
+    marginBottom: 0,
+    display: "inline-block"
+  };
+
+  const dateStyle = {
+    color: "#6b7280",
+    fontSize: 12,
+    marginBottom: 0,
+    display: "block",
+    textAlign: "left",
+  };
+
+  const reviewTextStyle = {
+    marginTop: 10,
+    marginLeft: 15,
+    marginBottom: 10,
+    fontSize: 14,
+    color: "#222",
+    textAlign: "left",
+    fontFamily: "inherit",
+    fontWeight: 400,
+    wordBreak: "break-word"
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* Show current user's review first if available */}
+      {userReview && (
+        <div key={userReview.id} style={cardStyle}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 0, flexWrap: "wrap" }}>
+            <span style={nameStyle}>
+              {userReview.userName} (You)
+            </span>
+            {renderStars(userRating ?? userReview.rating ?? 0, 24)}
+          </div>
+          <span style={dateStyle}>
+            {userReview.createdAt ? new Date(userReview.createdAt).toLocaleString() : ""}
+          </span>
+          <div style={reviewTextStyle}>{userReview.review}</div>
+        </div>
+      )}
+      {/* Show other users' reviews */}
+      {otherReviews.map((r) => (
+        <div key={r.id} style={{
+          ...cardStyle,
+          background: "#f8fafc",
+          border: "1.5px solid #b6c7d6",
+          color: "#222"
+        }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 0, flexWrap: "wrap" }}>
+            <span style={{ ...nameStyle, color: "#0d47a1" }}>{r.userName}</span>
+            {renderStars(r.rating ?? 0, 22)}
+          </div>
+          <span style={dateStyle}>
+            {r.createdAt ? new Date(r.createdAt).toLocaleString() : ""}
+          </span>
+          <div style={reviewTextStyle}>{r.review}</div>
+        </div>
+      ))}
+    </div>
+  );
+}

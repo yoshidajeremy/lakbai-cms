@@ -3,6 +3,8 @@ import { db } from './firebase';
 import { addDoc, collection, serverTimestamp, setDoc, doc } from 'firebase/firestore'; // Add setDoc and doc imports
 import { getDocs } from 'firebase/firestore';
 import AddFromCsvToggle, { IgnoreColumnsDropdown } from './addfromcsv-toggle';
+// Add this import for the new ImportOnlyColumnsDropdown
+import { ImportOnlyColumnsDropdown } from './addfromcsv-toggle';
 import { logDestinationImport } from './addfromcsv-audit';
 
 
@@ -362,12 +364,44 @@ useEffect(() => {
     { key: 'rating', label: 'Rating' },
   ];
 
+  // Add this constant for the columns that can be imported (same as IGNORABLE_COLUMNS)
+  const IMPORTABLE_COLUMNS = [
+    { key: 'region', label: 'Region' },
+    { key: 'category', label: 'Category' },
+    { key: 'description', label: 'Description' },
+    { key: 'tags', label: 'Tags' },
+    { key: 'location', label: 'Location' },
+    { key: 'bestTime', label: 'Best Time to Visit' },
+    { key: 'price', label: 'Price' },
+    { key: 'image', label: 'Image URL' },
+    { key: 'reviews', label: 'Reviews' },
+    { key: 'rating', label: 'Rating' },
+  ];
+
+  
   // State for ignored columns
   const [ignoredCols, setIgnoredCols] = useState({});
+
+  // State for import-only columns
+  const [importOnlyCols, setImportOnlyCols] = useState(() =>
+    IMPORTABLE_COLUMNS.reduce((acc, col) => ({ ...acc, [col.key]: true }), {})
+  );
+
+  // Add this derived state after importOnlyCols is defined:
+  const anyImportOnlyOn = useMemo(
+    () => IMPORTABLE_COLUMNS.some(col => importOnlyCols[col.key]),
+    [importOnlyCols]
+  );
+  
 
   // Handler for toggling ignore state
   const handleIgnoreToggle = (key, checked) => {
     setIgnoredCols(prev => ({ ...prev, [key]: checked }));
+  };
+
+  // Handler for toggling import-only state
+  const handleImportOnlyToggle = (key, checked) => {
+    setImportOnlyCols(prev => ({ ...prev, [key]: checked }));
   };
 
   // Only show toggles for columns that are missing in at least one row (always show, even if ignored)
@@ -584,18 +618,108 @@ useEffect(() => {
     return dest;
   }
   
+  // Pass importOnlyCols to rowToDestinationWithIgnore
+  function rowToDestinationWithIgnoreAndImportOnly(raw) {
+    // Helper: read using aliases and defaults
+    const g = (keys, def = '', keyName) => {
+      if (!importOnlyCols[keyName]) return undefined;
+      const v = getFirstValue(raw, keys);
+      return v === '' ? def : v;
+    };
+
+    // Use effectiveAliases for all lookups
+    const name = g(effectiveAliases.name || [], '', 'name');
+    if (!name && !ignoredCols.name && importOnlyCols.name) return null;
+
+    const tagsRaw = g(effectiveAliases.tags || [], '', 'tags');
+    const tags = tagsRaw !== undefined
+      ? String(tagsRaw).split(/[|,]/).map((s) => s.trim()).filter(Boolean)
+      : undefined;
+
+    const galleryRaw = raw.gallery || raw.galleryImages || raw.mediaGallery || '';
+    const gallery = String(galleryRaw)
+      .split(/[|,; ]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const ratingStr = importOnlyCols.rating
+      ? (raw.rating || raw.stars || '0')
+      : undefined;
+    const rating = ratingStr !== undefined
+      ? Math.max(0, Math.min(5, Number(ratingStr) || 0))
+      : undefined;
+
+    const status = String(raw.status ?? 'draft').toLowerCase();
+
+    // NEW: robust price parsing
+    const parsePrice = (v) => {
+      if (v == null) return null;
+      if (typeof v === 'number') return isFinite(v) ? v : null;
+      const cleaned = String(v)
+        .replace(/[^0-9.,]/g, '')
+        .replace(/,/g, '')
+        .trim();
+      if (!cleaned) return null;
+      const num = Number(cleaned);
+      return isFinite(num) ? num : null;
+    };
+
+    const priceRaw = importOnlyCols.price
+      ? (raw.price ?? raw.pricerange ?? raw.budget ?? raw.cost ?? raw.amount ?? '')
+      : undefined;
+    const priceNum = priceRaw !== undefined ? parsePrice(priceRaw) : undefined;
+
+    const categoriesRaw = g(effectiveAliases.categories || [], '', 'category');
+    const categories = categoriesRaw !== undefined
+      ? String(categoriesRaw).split(/[|,;]/).map((s) => s.trim()).filter(Boolean)
+      : undefined;
+
+    const dest = {
+      ...(importOnlyCols.name && !ignoredCols.name ? { name: String(name).trim() } : {}),
+      ...(importOnlyCols.category && !ignoredCols.categories ? { categories } : {}),
+      ...(importOnlyCols.description && !ignoredCols.description ? { description: g(effectiveAliases.description || [], '', 'description') } : {}),
+      content: raw.content || raw.body || raw.html || '',
+      ...(importOnlyCols.tags && !ignoredCols.tags ? { tags } : {}),
+      ...(importOnlyCols.location && !ignoredCols.location ? { location: g(effectiveAliases.location || [], '', 'location') } : {}),
+      ...(importOnlyCols.region && !ignoredCols.region ? { region: g(effectiveAliases.region || [], '', 'region') } : {}),
+      ...(importOnlyCols.price && !ignoredCols.price ? { priceRange: priceRaw, price: priceNum } : {}),
+      ...(importOnlyCols.bestTime && !ignoredCols.bestTime ? { bestTime: g(effectiveAliases.bestTime || [], '', 'bestTime') } : {}),
+      ...(importOnlyCols.rating && !ignoredCols.rating ? { rating } : {}),
+      ...(importOnlyCols.reviews && !ignoredCols.reviews ? { reviews: g(effectiveAliases.reviews || [], '', 'reviews') } : {}),
+      media: {
+        ...(importOnlyCols.image && !ignoredCols.image ? { featuredImage: getFirstValue(raw, effectiveAliases.image || []) } : {}),
+        gallery
+      },
+      status,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    const featured = String(raw.featured ?? raw.isfeatured ?? '').toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(featured)) dest.featured = true;
+
+    return dest;
+  }
+  
 
   const importNow = async () => {
     if (!rows.length) return;
     if (missingColumns.length) return alert('Please include all required columns before importing.');
     if (rowIssues.length) return alert('Please fill all required cells before importing.');
 
-    const duplicateNames = findDuplicateNames(rows);
-    if (duplicateNames.length && !ignoredCols.name) {
-      setAlertType('error');
-      setAlertMsg(`Duplicate destination names found: ${duplicateNames.join(', ')}`);
-      setTimeout(() => setAlertMsg(''), 3500);
-      return;
+    // --- NEW: If any import-only column is ON, ignore "already exists" error and allow import ---
+    // (Skip duplicate check and error if any import-only column is ON)
+    let skipDuplicateCheck = anyImportOnlyOn;
+
+    if (!skipDuplicateCheck) {
+      // Only check for duplicate names if not skipping
+      const duplicateNames = findDuplicateNames(rows);
+      if (duplicateNames.length && !ignoredCols.name) {
+        setAlertType('error');
+        setAlertMsg(`Duplicate destination names found: ${duplicateNames.join(', ')}`);
+        setTimeout(() => setAlertMsg(''), 3500);
+        return;
+      }
     }
 
     setBusy(true);
@@ -606,58 +730,34 @@ useEffect(() => {
         String(r.name || r.destinationname || r.title || '').trim().toLowerCase()
       ).filter(Boolean);
 
-      // --- NEW: Check for same name AND same location ---
-      const importedNameLocation = rows.map(r => ({
-      name: String(r.name || r.destinationname || r.title || '').trim().toLowerCase(),
-      location: String(r.location || '').trim().toLowerCase()
-      }));
-
-      // Fetch all existing destinations with name and location
+      // Fetch all existing destinations by name only (not name+location)
       const snap = await getDocs(collection(db, 'destinations'));
-      const existingNameLocation = [];
-      snap.forEach(doc => {
-        const data = doc.data();
+      const existingDocs = {};
+      snap.forEach(docSnap => {
+        const data = docSnap.data();
         if (data?.name) {
-          existingNameLocation.push({
-            name: String(data.name).trim().toLowerCase(),
-            location: String(data.location || '').trim().toLowerCase()
-          });
+          const key = String(data.name).trim().toLowerCase();
+          existingDocs[key] = { ...data, id: docSnap.id };
         }
       });
 
-          // Find duplicates: same name AND same location
-    const duplicates = importedNameLocation.filter(imported =>
-      existingNameLocation.some(existing =>
-        imported.name === existing.name && imported.location === existing.location
-      )
-    );
+      // --- NEW: Only block import if no import-only column is ON ---
+      let firebaseDuplicates = [];
+      if (!skipDuplicateCheck) {
+        firebaseDuplicates = importedNames.filter(n => existingNames.has(n));
+        if (firebaseDuplicates.length && !ignoredCols.name) {
+          setAlertType('error');
+          setAlertMsg(`Destination names already exist: ${firebaseDuplicates.join(', ')}`);
+          setTimeout(() => setAlertMsg(''), 3500);
+          setBusy(false);
+          return;
+        }
+      }
 
-    if (duplicates.length && !ignoredCols.name) {
-      setAlertType('error');
-      setAlertMsg(
-        `Destination(s) already exist with same name and location: ${duplicates
-          .map(d => `${d.name} (${d.location})`)
-          .slice(0, 5)
-          .join(', ')}${duplicates.length > 5 ? `, and ${duplicates.length - 5} more` : ''}`
-      );
-      setTimeout(() => setAlertMsg(''), 3500);
-      setBusy(false);
-      return;
-    }
-
-    // Continue with previous duplicate name check (name only, not location)
-    const firebaseDuplicates = importedNames.filter(n => existingNames.has(n));
-    if (firebaseDuplicates.length && !ignoredCols.name) {
-      setAlertType('error');
-      setAlertMsg(`Destination names already exist: ${firebaseDuplicates.join(', ')}`);
-      setTimeout(() => setAlertMsg(''), 3500);
-      setBusy(false);
-      return;
-    }
       // Map rows to destination docs
       const toCreate = [];
       for (const raw of rows) {
-        const dest = rowToDestinationWithIgnore(raw);
+        const dest = rowToDestinationWithIgnoreAndImportOnly(raw);
         if (dest) toCreate.push(dest);
       }
       setImportProgress({ imported: 0, failed: 0, total: toCreate.length }); // before import loop
@@ -667,7 +767,7 @@ useEffect(() => {
         return;
       }
 
-      // Create in Firestore (destinations) using name as ID
+      // Create or update in Firestore (destinations) using name as ID
       const now = new Date();
       const created = [];
       for (const item of toCreate) {
@@ -693,7 +793,40 @@ useEffect(() => {
                 .replace(/[^a-z0-9]+/g, '-') // replace non-alphanumeric with dash
                 .replace(/^-+|-+$/g, '')    // trim dashes
             : Math.random().toString(36).slice(2, 10); // fallback if name is ignored
-          await setDoc(doc(db, 'destinations', id), cleanFirestoreDoc(item));
+
+          // If destination exists and importOnlyCols is used, update only selected fields
+          const key = String(item.name).trim().toLowerCase();
+          if (existingDocs[key]) {
+            // Only update fields that are toggled ON in importOnlyCols
+            const updateFields = {};
+            for (const col of IMPORTABLE_COLUMNS) {
+              if (importOnlyCols[col.key] && item[col.key] !== undefined) {
+                if (col.key === 'image') {
+                  if (!updateFields.media) updateFields.media = {};
+                  updateFields.media.featuredImage = item.media?.featuredImage;
+                } else if (col.key === 'category') {
+                  updateFields.category = item.category;
+                  updateFields.packingSuggestions = item.packingSuggestions;
+                } else if (col.key === 'price') {
+                  updateFields.price = item.price;
+                  updateFields.priceRange = item.priceRange;
+                } else if (col.key === 'bestTime') {
+                  updateFields.bestTime = item.bestTime;
+                } else if (col.key === 'reviews') {
+                  updateFields.reviews = item.reviews;
+                } else if (col.key === 'rating') {
+                  updateFields.rating = item.rating;
+                } else {
+                  updateFields[col.key] = item[col.key];
+                }
+              }
+            }
+            updateFields.updatedAt = serverTimestamp();
+            await setDoc(doc(db, 'destinations', existingDocs[key].id), cleanFirestoreDoc({ ...existingDocs[key], ...updateFields }));
+          } else {
+            await setDoc(doc(db, 'destinations', id), cleanFirestoreDoc(item));
+          }
+
           // Log audit
           await logDestinationImport(
             cleanFirestoreDoc ({
@@ -813,8 +946,7 @@ useEffect(() => {
 
   // Check for existing destinations on file import or rows change
 
-
-  const disableImport =
+const disableImport =
   busy ||
   rows.length === 0 ||
   missingColumns.some(label => {
@@ -822,9 +954,10 @@ useEffect(() => {
     return !(col && ignoredCols[col.key]);
   }) ||
   filteredRowIssues.length > 0 ||
-  (!ignoredCols.name && anyExist) ||
-  allExist;
-
+  (
+    // Only block if NO import-only column is ON
+    !anyImportOnlyOn && ((!ignoredCols.name && anyExist) || allExist)
+  );
 
 
   return (
@@ -908,7 +1041,7 @@ useEffect(() => {
             {/* Inline Ignore columns dropdown */}
             <div style={{ marginBottom: 0 }}>
               <IgnoreColumnsDropdown
-                columns={columnsWithMissingCells} // only columns that actually have missing cells
+                columns={columnsWithMissingCells}
                 ignored={columnsWithMissingCells.filter(label => {
                   const col = IGNORABLE_COLUMNS.find(c => c.label === label);
                   return col && ignoredCols[col.key];
@@ -922,52 +1055,66 @@ useEffect(() => {
                 }}
               />
             </div>
-              {/* Progress Bar - upper right, inline */}
-              {busy && (
-                <div style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: 0,
-                  marginRight: 20,
-                  marginTop: 110,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  background: '#f3f4f6',
-                  borderRadius: 8,
-                  padding: '10px 15px',
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: '#059669',
-                  boxShadow: '0 1px 6px rgba(0,0,0,0.04)'
+            {/* Import Only Columns dropdown beside Ignore Columns */}
+              <div style={{ marginBottom: 0, marginLeft: 8 }}>
+                <ImportOnlyColumnsDropdown
+                  columns={IMPORTABLE_COLUMNS.map(c => c.label)}
+                  imported={IMPORTABLE_COLUMNS.filter(col => importOnlyCols[col.key]).map(col => col.label)}
+                  disabled={rows.length === 0}
+                  onToggle={label => {
+                    const col = IMPORTABLE_COLUMNS.find(c => c.label === label);
+                    if (col) {
+                      handleImportOnlyToggle(col.key, !importOnlyCols[col.key]);
+                    }
+                  }}
+                />
+              </div>
+            {/* Progress Bar - upper right, inline */}
+            {busy && (
+              <div style={{
+                position: 'absolute',
+                right: 0,
+                top: 0,
+                marginRight: 20,
+                marginTop: 110,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                background: '#f3f4f6',
+                borderRadius: 8,
+                padding: '10px 15px',
+                fontSize: 14,
+                fontWeight: 600,
+                color: '#059669',
+                boxShadow: '0 1px 6px rgba(0,0,0,0.04)'
+              }}>
+                <span>
+                  Importing: {importProgress.imported} / {importProgress.total}
+                </span>
+                <span style={{
+                  color: '#b91c1c',
+                  fontWeight: 500,
+                  marginLeft: 8
                 }}>
-                  <span>
-                    Importing: {importProgress.imported} / {importProgress.total}
-                  </span>
-                  <span style={{
-                    color: '#b91c1c',
-                    fontWeight: 500,
-                    marginLeft: 8
-                  }}>
-                    {importProgress.failed > 0 && `Not imported: ${importProgress.failed}`}
-                  </span>
+                  {importProgress.failed > 0 && `Not imported: ${importProgress.failed}`}
+                </span>
+                <div style={{
+                  width: 80,
+                  height: 8,
+                  background: '#e5e7eb',
+                  borderRadius: 4,
+                  overflow: 'hidden',
+                  marginLeft: 8
+                }}>
                   <div style={{
-                    width: 80,
-                    height: 8,
-                    background: '#e5e7eb',
-                    borderRadius: 4,
-                    overflow: 'hidden',
-                    marginLeft: 8
-                  }}>
-                    <div style={{
-                      width: `${Math.round((importProgress.imported / importProgress.total) * 100)}%`,
-                      height: '100%',
-                      background: '#10b981',
-                      transition: 'width 0.3s'
-                    }} />
-                  </div>
+                    width: `${Math.round((importProgress.imported / importProgress.total) * 100)}%`,
+                    height: '100%',
+                    background: '#10b981',
+                    transition: 'width 0.3s'
+                  }} />
                 </div>
-              )}
+              </div>
+            )}
           </div>
 
           <div

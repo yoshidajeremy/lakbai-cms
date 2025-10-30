@@ -5,7 +5,7 @@ import { addTripForCurrentUser } from './Itinerary';
 import { trackDestinationAdded } from './itinerary_Stats';
 import { 
   collection, getDocs, orderBy, query as fsQuery, limit, doc, getDoc, onSnapshot, deleteDoc, serverTimestamp,
-  where as fsWhere // ADD
+  where as fsWhere, setDoc, arrayUnion, arrayRemove // ADD
 } from 'firebase/firestore';
 import { fetchCloudinaryImages, getImageForDestination as getCloudImageForDestination } from "./image-router";
 
@@ -15,6 +15,11 @@ import { db, auth } from './firebase';
 import './dashboardBanner.css';
 import useUserDashboardStats from './dashboard-stats-row'; // <-- Add this import at the top
 import destImages from './dest-images.json'; // Add this import at the top
+import './Styles/bookmark2.css';
+import { breakdown } from './rules';
+import { unlockAchievement } from './profile';
+import { runTransaction } from 'firebase/firestore';
+
 
 // Helper to get image URL by destination name
 function getImageForDestination(name) {
@@ -511,7 +516,6 @@ function ItinerarySummaryModal({ item, onClose }) {
   return createPortal(modalContent, document.body);
 }
 
-// Interest → category rules (case-sensitive keys as in your profile)
 const INTEREST_RULES = {
   "Surfer": ["Beach"],
   "Backpacker": ["Mountain", "Tourist", "Natural"],
@@ -521,7 +525,7 @@ const INTEREST_RULES = {
   "Nature Enthusiast": ["Natural", "Parks", "Lakes"],
   "Digital Nomad": ["City Explorer", "Tourist", "Landmarks"],
   "Road Tripper": ["Landmarks", "Tourist", "Natural"],
-  "Beach Lover": ["Beach", "Islands", "Natural"],
+  "Beach Lover": ["Beach"],
   "City Explorer": ["Tourist", "Museums", "Cultural"],
   "Photographer": ["Landmarks", "Natural", "Heritage"],
   "Historian": ["Historical", "Heritage", "Museums"],
@@ -530,7 +534,7 @@ const INTEREST_RULES = {
   "Luxury Traveler": ["Islands", "Beach", "Heritage"],
   "Eco-Traveler": ["Parks", "Natural", "Caves"],
   "Cruise Lover": ["Islands", "Beach", "Lakes"],
-  "Winter Sports Enthusiast": ["Mountain", "Natural", "Parks"],
+  "Winter Sports Enthusiast": [],
   "Solo Wanderer": ["Tourist", "Cultural", "Landmarks"]
 };
 
@@ -539,7 +543,6 @@ const INTEREST_RULES_LC = Object.fromEntries(
 );
 
 
-// Helper to prefer cloud -> firebase -> local -> placeholder (same strategy as bookmarks2)
 function getFirebaseImageForDestination(firebaseImages, destName) {
   if (!destName) return null;
   const normalized = destName.trim().toLowerCase();
@@ -560,10 +563,12 @@ function formatPeso(v) {
   return '—';
 }
 
+
 function Dashboard({ setShowAIModal }) {
+  const [detailsModalOpen, setDetailsModalOpen] = useState(false);
+  const [selectedCard, setSelectedCard] = useState(null);
   const navigate = useNavigate();
 
-  // Fetch trips from Firestore (itinerary/{userId}/items) for the current user, real-time
   const [trips, setTrips] = useState([]);
   const [tripsLoading, setTripsLoading] = useState(true);
   useEffect(() => {
@@ -605,6 +610,7 @@ function Dashboard({ setShowAIModal }) {
 
   const [bookmarks, setBookmarks] = useState([]);
   const [bookmarksLoading, setBookmarksLoading] = useState(true);
+  const [personalizedSort, setPersonalizedSort] = useState('rating-desc');
 
   // ref to the container that holds the bookmark items (popup will be positioned relative to this)
   const bookmarksContainerRef = useRef(null);
@@ -619,7 +625,33 @@ function Dashboard({ setShowAIModal }) {
   const anchorRef = useRef(null); // store the anchor button element
   const [openActionsId, setOpenActionsId] = useState(null);
   const [actionsPos, setActionsPos] = useState({ top: 0, left: 0, anchorRect: null });
+
+  // ADD: Rating & modal state for personalized details
+  const [ratingsByDest, setRatingsByDest] = useState({});
+  const [selected, setSelected] = useState(null);
+  const [userRating, setUserRating] = useState(0);
+  const [savingRating, setSavingRating] = useState(false);
+  const [destinations, setDestinations] = useState([]);
+  const [recommendedDestinations, setRecommendedDestinations] = useState([]);
+  const [selectedFares, setSelectedFares] = useState([]); // For fare checkboxes
+  const [ratingsCountByDest, setRatingsCountByDest] = useState({});
+  const [modalOpen, setModalOpen] = useState(false);
+  const [reviewsByDest, setReviewsByDest] = useState({});
+  const [viewedDestinations, setViewedDestinations] = useState(new Set());
+  const [currentUser, setCurrentUser] = useState(null);
+  const [personalizedRatingsByDest, setPersonalizedRatingsByDest] = useState({});
+  const [personalizedUserRating, setPersonalizedUserRating] = useState(0);
+  const [personalizedSavingRating, setPersonalizedSavingRating] = useState(false);
+  const [personalizedRatingsCountByDest, setPersonalizedRatingsCountByDest] = useState({});
+  const [personalizedReviewsByDest, setPersonalizedReviewsByDest] = useState({});
+  const [userReviewsCountByDest, setUserReviewsCountByDest] = useState({});
   
+  useEffect(() => {
+  const unsub = auth.onAuthStateChanged((u) => setCurrentUser(u));
+  return () => typeof unsub === 'function' && unsub();
+}, []);
+
+
   // compute popup position relative to bookmarksContainerRef so it stays inside that parent
   const computeAndSetPos = (anchorEl) => {
     if (!anchorEl || !bookmarksContainerRef.current) return;
@@ -662,6 +694,267 @@ function Dashboard({ setShowAIModal }) {
     setActionsPos({ top, left, anchorRect });
   };
   
+    function getBreakdown(price) {
+    if (!price) return [];
+    // Remove non-digits and leading ₱, commas, spaces
+    const digits = String(price).replace(/[^\d]/g, '');
+    if (!digits) return [];
+    const key = `P${digits}`;
+    return breakdown[key] || [];
+  }
+
+    const fareOptions = [
+  { type: 'sea', label: '₱500 - ₱850+ (Sea Travel: short routes)', value: 'sea-short' },
+  { type: 'sea', label: '₱1,100 - ₱7,100+ (Sea Travel: long routes)', value: 'sea-long' },
+  { type: 'air', label: '₱1,500 - ₱4,000+ (Air Travel: short routes)', value: 'air-short' },
+  { type: 'air', label: '₱2,500 - ₱8,600+ (Air Travel: long routes)', value: 'air-long' },
+];
+
+  const getFareLabel = (val) => fareOptions.find(f => f.value === val)?.label || '';
+
+// Compute the highest fare selected
+const selectedFareAmounts = selectedFares
+  .map(val => {
+    const label = getFareLabel(val);
+    return parseFareRange(label);
+  })
+  .filter(Boolean);
+
+const totalSelectedFare = selectedFareAmounts.length > 0
+  ? selectedFareAmounts.reduce((sum, v) => sum + v, 0)
+  : 0;
+
+// Compute total price (base + max fare)
+const getTotalPrice = (basePrice) => {
+  let base = 0;
+  if (typeof basePrice === 'number') base = basePrice;
+  else if (typeof basePrice === 'string') {
+    const digits = basePrice.replace(/[^\d]/g, '');
+    base = digits ? Number(digits) : 0;
+  }
+  return base + totalSelectedFare;
+};
+
+function parseFareRange(str) {
+  // Example: "₱2,500 - ₱5,000+ (long routes)"
+  const match = str.match(/₱([\d,]+)\s*-\s*₱([\d,]+)/);
+  if (!match) return 0;
+  // Return the higher value as number
+  return Number(match[2].replace(/,/g, ''));
+}
+
+  useEffect(() => {
+    if (!modalOpen || !selected) return;
+
+    async function fetchReviewCount() {
+      try {
+        const docRef = doc(db, 'destinations', selected.id,);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          const review = snap.data().review;
+          setReviewsByDest(prev => ({
+            ...prev,
+            [selected.id]: typeof review === 'number' ? review : 0
+          }));
+        } else {
+          setReviewsByDest(prev => ({
+            ...prev,
+            [selected.id]: 0
+          }));
+        }
+      } catch (e) {
+        setReviewsByDest(prev => ({
+          ...prev,
+          [selected.id]: 0
+        }));
+      }
+    }
+
+    fetchReviewCount();
+  }, [modalOpen, selected]);
+
+    useEffect(() => {
+    if (!modalOpen || !selected) return;
+
+    async function fetchRatingsCount() {
+      try {
+        const ratingsSnap = await getDocs(collection(db, 'destinations', selected.id, 'ratings'));
+        setRatingsCountByDest(prev => ({
+          ...prev,
+          [selected.id]: ratingsSnap.size || 0
+        }));
+      } catch (e) {
+        setRatingsCountByDest(prev => ({
+          ...prev,
+          [selected.id]: 0
+        }));
+      }
+    }
+
+    fetchRatingsCount();
+  }, [modalOpen, selected]);
+  
+    const closeDetails = () => {
+      setModalOpen(false);
+      setSelected(null);
+      setUserRating(0);
+    };
+
+  async function checkMiniPlannerAchievement(user) {
+  try {
+    if (!user?.uid) return;
+    
+    const sharedQuery = fsQuery(
+      collection(db, 'sharedItineraries'),
+      fsWhere('sharedBy', '==', user.uid)
+    );
+    
+    const snapshot = await getDocs(sharedQuery);
+    
+    if (snapshot.size >= 1) {
+      await unlockAchievement(11, "Mini Planner");
+    }
+  } catch (error) {
+    console.error('Error checking Mini Planner achievement:', error);
+  }
+}
+
+useEffect(() => {
+  if (!detailsModalOpen || !selectedCard) return;
+  async function fetchUserReviewsCount() {
+    try {
+      const reviewsSnap = await getDocs(collection(db, 'destinations', selectedCard.id, 'reviews'));
+      setUserReviewsCountByDest(prev => ({
+        ...prev,
+        [selectedCard.id]: reviewsSnap.size || 0
+      }));
+    } catch (e) {
+      setUserReviewsCountByDest(prev => ({
+        ...prev,
+        [selectedCard.id]: 0
+      }));
+    }
+  }
+  fetchUserReviewsCount();
+}, [detailsModalOpen, selectedCard]);
+
+useEffect(() => {
+  if (!detailsModalOpen || !selectedCard) return;
+
+  // Fetch average rating and count
+  (async () => {
+    try {
+      const rsnap = await getDocs(collection(db, 'destinations', selectedCard.id, 'ratings'));
+      let sum = 0, count = 0;
+      rsnap.forEach((r) => {
+        const v = Number(r.data()?.value) || 0;
+        if (v > 0) { sum += v; count += 1; }
+      });
+      const avg = count ? sum / count : 0;
+      setPersonalizedRatingsByDest((m) => ({ ...m, [selectedCard.id]: { avg, count } }));
+      setPersonalizedRatingsCountByDest((m) => ({ ...m, [selectedCard.id]: count }));
+    } catch (e) {
+      setPersonalizedRatingsByDest((m) => ({ ...m, [selectedCard.id]: { avg: 0, count: 0 } }));
+      setPersonalizedRatingsCountByDest((m) => ({ ...m, [selectedCard.id]: 0 }));
+    }
+  })();
+
+  // Fetch review count
+  (async () => {
+    try {
+      const docRef = doc(db, 'destinations', selectedCard.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const review = snap.data().review;
+        setPersonalizedReviewsByDest(prev => ({
+          ...prev,
+          [selectedCard.id]: typeof review === 'number' ? review : 0
+        }));
+      } else {
+        setPersonalizedReviewsByDest(prev => ({
+          ...prev,
+          [selectedCard.id]: 0
+        }));
+      }
+    } catch (e) {
+      setPersonalizedReviewsByDest(prev => ({
+        ...prev,
+        [selectedCard.id]: 0
+      }));
+    }
+  })();
+
+  // Fetch user's rating
+  (async () => {
+    try {
+      const u = auth.currentUser;
+      if (!u) { setPersonalizedUserRating(0); return; }
+      const rref = doc(db, 'destinations', selectedCard.id, 'ratings', u.uid);
+      const rsnap = await getDoc(rref);
+      setPersonalizedUserRating(Number(rsnap.data()?.value || 0));
+    } catch {
+      setPersonalizedUserRating(0);
+    }
+  })();
+}, [detailsModalOpen, selectedCard]);
+
+// --- Add this function for rating ---
+const ratePersonalizedSelected = async (value) => {
+  const u = auth.currentUser;
+  if (!u) { alert('Please sign in to rate.'); return; }
+  if (!selectedCard) return;
+  const v = Math.max(1, Math.min(5, Number(value) || 0));
+  setPersonalizedSavingRating(true);
+  try {
+    const ref = doc(db, 'destinations', String(selectedCard.id), 'ratings', u.uid);
+    await setDoc(ref, {
+      value: v,
+      userId: u.uid,
+      updatedAt: serverTimestamp(),
+      name: selectedCard.name || '',
+    }, { merge: true });
+
+    setPersonalizedUserRating(v);
+
+    const userRatingRef = doc(db, 'users', u.uid, 'ratings', String(selectedCard.id));
+    await setDoc(
+      userRatingRef,
+      {
+        destId: String(selectedCard.id),
+        value: v,
+        updatedAt: serverTimestamp(),
+        name: selectedCard.name || '',
+      },
+      { merge: true }
+    );
+
+    const rsnap = await getDocs(collection(db, 'destinations', String(selectedCard.id), 'ratings'));
+    let sum = 0, count = 0;
+    rsnap.forEach((r) => { const val = Number(r.data()?.value) || 0; if (val > 0) { sum += val; count += 1; } });
+    const avg = count ? sum / count : 0;
+
+    setPersonalizedRatingsByDest((m) => ({ ...m, [selectedCard.id]: { avg, count } }));
+  } catch (e) {
+    console.error('Save rating failed:', e);
+    alert('Failed to save rating.');
+  } finally {
+    setPersonalizedSavingRating(false);
+  }
+};
+    const formatPackingSuggestions = (text) => {
+    if (!text) return "No packing suggestions available.";
+    
+    // Split by bullet points (•, -, or *)
+    const lines = text
+      .split(/[•\-*]/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+    
+    if (lines.length === 0) return "No packing suggestions available.";
+    
+    return lines;
+  };
+
   // compute popup position relative to tripsContainerRef (right-side popup, vertically centered)
   const computeAndSetTripPos = (anchorEl) => {
     if (!anchorEl || !tripsContainerRef.current) return;
@@ -714,6 +1007,13 @@ function Dashboard({ setShowAIModal }) {
     computeAndSetTripPos(btn);
     setOpenTripActionsId(id);
   };
+
+  const sortedRecommendedDestinations = [...recommendedDestinations].sort((a, b) => {
+  const ra = Number(a.rating) || 0;
+  const rb = Number(b.rating) || 0;
+  if (personalizedSort === 'rating-asc') return ra - rb;
+  return rb - ra;
+});
   
   // close popup when clicking outside
   useEffect(() => {
@@ -823,6 +1123,7 @@ function Dashboard({ setShowAIModal }) {
       if (typeof unsubscribe === "function") unsubscribe();
     };
   }, []);
+  
 
   // Use the custom hook for live stats
   const { loading: statsLoading, error: statsError, stats } = useUserDashboardStats();
@@ -830,19 +1131,102 @@ function Dashboard({ setShowAIModal }) {
   // Demo: local state for bookmarks for personalized cards
   const [personalizedBookmarks, setPersonalizedBookmarks] = useState({});
 
-  // Modal state for personalized details
-  const [detailsModalOpen, setDetailsModalOpen] = useState(false);
-  const [selectedCard, setSelectedCard] = useState(null);
+  // Sync hearts from Firestore bookmarks so existing saved items show as active
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged(async (u) => {
+      if (!u) { setPersonalizedBookmarks({}); return; }
+      try {
+        // Merge ids from both the subcollection and the userBookmarks doc
+        const [subsSnap, listSnap] = await Promise.all([
+          getDocs(collection(db, 'users', u.uid, 'bookmarks')),
+          getDoc(doc(db, 'userBookmarks', u.uid)).catch(() => null)
+        ]);
+
+        const map = {};
+        subsSnap.forEach(d => { map[d.id] = true; });
+
+        if (listSnap && listSnap.exists()) {
+          const arr = Array.isArray(listSnap.data()?.bookmarks) ? listSnap.data().bookmarks : [];
+          arr.forEach(id => { map[String(id)] = true; });
+        }
+
+        setPersonalizedBookmarks(map);
+      } catch {
+        setPersonalizedBookmarks({});
+      }
+    });
+    return () => typeof unsub === 'function' && unsub();
+  }, []);
 
   // Handler for toggling bookmark for personalized cards
-  const handlePersonalizedBookmark = (id) => {
-    setPersonalizedBookmarks((prev) => ({ ...prev, [id]: !prev[id] }));
+  const handlePersonalizedBookmark = async (id) => {
+    const user = auth.currentUser;
+    if (!user) { alert('Please sign in to use bookmarks.'); return; }
+
+    const next = !personalizedBookmarks[id];
+    // optimistic UI
+    setPersonalizedBookmarks(prev => ({ ...prev, [id]: next }));
+
+    try {
+      const d = (recommendedDestinations || []).find(x => String(x.id) === String(id)) || {};
+      const ref = doc(db, 'users', user.uid, 'bookmarks', String(id));
+      const listRef = doc(db, 'userBookmarks', user.uid); // keep Bookmarks2 in sync
+
+      if (next) {
+        const payload = {
+          id: d.id || String(id),
+          name: d.name || '',
+          description: d.description || '',
+          region: d.region || '',
+          rating: d.rating || 0,
+          price: d.price || '',
+          priceTier: d.priceTier || null,
+          tags: Array.isArray(d.tags) ? d.tags : [],
+          category: Array.isArray(d.category) ? d.category
+            : (typeof d.category === 'string' ? [d.category] : []),
+          location: d.location || '',
+          image: d.image || pickCardImage(d.name) || getImageForDestination(d.name) || '',
+          bestTime: d.bestTime || '',
+          createdAt: serverTimestamp()
+        };
+        await setDoc(ref, payload, { merge: true });
+
+        // Update list doc (used by bookmarks2.js)
+        await setDoc(
+          listRef,
+          {
+            userId: user.uid,
+            updatedAt: serverTimestamp(),
+            bookmarks: arrayUnion(String(id))
+          },
+          { merge: true }
+        );
+      } else {
+        await deleteDoc(ref);
+        await setDoc(
+          listRef,
+          {
+            userId: user.uid,
+            updatedAt: serverTimestamp(),
+            bookmarks: arrayRemove(String(id))
+          },
+          { merge: true }
+        );
+      }
+    } catch (e) {
+      console.error('bookmark toggle failed', e);
+      // rollback UI
+      setPersonalizedBookmarks(prev => ({ ...prev, [id]: !next }));
+      alert('Failed to update bookmark. Please try again.');
+    }
   };
 
   // Handler for view details (open modal)
   const handlePersonalizedDetails = (card) => {
     setSelectedCard(card);
     setDetailsModalOpen(true);
+    setSelected(card);
+    setUserRating(0);
   };
 
   // Handler to close modal
@@ -851,41 +1235,134 @@ function Dashboard({ setShowAIModal }) {
     setSelectedCard(null);
   };
 
-  const personalizedCards = [
-    {
-      id: 'banaue',
-      name: 'Banaue Rice Terraces',
-      region: 'CAR - Cordillera Administrative Region',
-      rating: 5.0,
-      price: '₱1,800',
-      priceTier: 'less',
-      description: 'Ancient rice terraces carved into mountains, often called the "Eighth Wonder of the World."',
-      tags: ['UNESCO', 'Cultural', 'Hiking'],
-      image: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=400&q=80'
-    },
-    {
-      id: 'el-nido',
-      name: 'El Nido',
-      region: 'Region IV-B - MIMAROPA',
-      rating: 4.8,
-      price: '₱3,200',
-      priceTier: 'expensive',
-      description: 'Dramatic limestone cliffs and turquoise lagoons.',
-      tags: ['Islands', 'Snorkeling', 'Boat Tour'],
-      image: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=400&q=80'
-    },
-    {
-      id: 'mayon',
-      name: 'Mayon Volcano',
-      region: 'Region V - Bicol Region',
-      rating: 4.5,
-      price: '₱1,200',
-      priceTier: 'less',
-      description: 'Perfect cone-shaped active volcano, considered the most beautiful volcano in the Philippines.',
-      tags: ['Volcano', 'Hiking', 'Photography'],
-      image: 'https://images.unsplash.com/photo-1519125323398-675f0ddb6308?auto=format&fit=crop&w=400&q=80'
+  const openDetails = async (d) => {
+    setSelected(d);
+    setModalOpen(true);
+
+    const newViewed = new Set(viewedDestinations);
+    const wasNew = !newViewed.has(d.id);
+    newViewed.add(d.id);
+    setViewedDestinations(newViewed);
+
+    if (currentUser && wasNew) {
+      try {
+        const viewedRef = doc(db, 'users', currentUser.uid, 'viewedDestinations', 'data');
+        await setDoc(
+          viewedRef,
+          {
+            destinationIds: Array.from(newViewed),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (error) {
+        console.warn('Could not save viewed destination:', error);
+      }
     }
-  ];
+
+    if (newViewed.size >= 10) {
+      try {
+        await unlockAchievement(7, "Explorer at Heart");
+      } catch (error) {
+        console.error("Error unlocking achievement:", error);
+      }
+    }
+
+    try {
+      const u = auth.currentUser;
+      if (!u) { setUserRating(0); return; }
+      const rref = doc(db, 'destinations', d.id, 'ratings', u.uid);
+      const rsnap = await getDoc(rref);
+      setUserRating(Number(rsnap.data()?.value || 0));
+    } catch {
+      setUserRating(0);
+    }
+
+    if (!ratingsByDest[d.id]) {
+      try {
+        const rsnap = await getDocs(collection(db, 'destinations', d.id, 'ratings'));
+        let sum = 0, count = 0;
+        rsnap.forEach((r) => {
+          const v = Number(r.data()?.value) || 0;
+          if (v > 0) { sum += v; count += 1; }
+        });
+        const avg = count ? sum / count : 0;
+        setRatingsByDest((m) => ({ ...m, [d.id]: { avg, count } }));
+      } catch (e) {
+        console.error('Load selected avg failed', e);
+      }
+    }
+  };
+
+  
+  // ADD: load all published destinations (for potential future use or stats)
+  useEffect(() => {
+    const loadDestinations = async () => {
+      try {
+        const q = fsQuery(
+          collection(db, 'destinations'),
+          fsWhere('status', 'in', ['published', 'PUBLISHED'])
+        );
+        const snap = await getDocs(q);
+        const items = snap.docs.map((x) => ({
+          id: x.id,
+          ...x.data(),
+          category: x.data().category || '',
+        }));
+        setDestinations(items);
+      } catch (err) {
+        console.error('Failed to load destinations:', err);
+        setDestinations([]);
+      }
+    };
+    loadDestinations();
+  }, []);
+
+
+  // ADD: Save user rating
+  const rateSelected = async (value) => {
+    const u = auth.currentUser;
+    if (!u) { alert('Please sign in to rate.'); return; }
+    if (!selected) return;
+    const v = Math.max(1, Math.min(5, Number(value) || 0));
+    setSavingRating(true);
+    try {
+      const ref = doc(db, 'destinations', String(selected.id), 'ratings', u.uid);
+      await setDoc(ref, {
+        value: v,
+        userId: u.uid,
+        updatedAt: serverTimestamp(),
+        name: selected.name || '',
+      }, { merge: true });
+
+      setUserRating(v);
+
+      const userRatingRef = doc(db, 'users', u.uid, 'ratings', String(selected.id));
+      await setDoc(
+        userRatingRef,
+        {
+          destId: String(selected.id),
+          value: v,
+          updatedAt: serverTimestamp(),
+          name: selected.name || '',
+        },
+        { merge: true }
+      );
+
+      const rsnap = await getDocs(collection(db, 'destinations', String(selected.id), 'ratings'));
+      let sum = 0, count = 0;
+      rsnap.forEach((r) => { const val = Number(r.data()?.value) || 0; if (val > 0) { sum += val; count += 1; } });
+      const avg = count ? sum / count : 0;
+
+      setRatingsByDest((m) => ({ ...m, [selected.id]: { avg, count } }));
+      setDestinations((prev) => prev.map((x) => (x.id === selected.id ? { ...x, rating: avg } : x)));
+    } catch (e) {
+      console.error('Save rating failed:', e);
+      alert('Failed to save rating.');
+    } finally {
+      setSavingRating(false);
+    }
+  };
 
   // --- Bookmark preview action handlers (add inside Dashboard before return) ---
   const openBookmarkDetails = (bm) => {
@@ -954,7 +1431,7 @@ function Dashboard({ setShowAIModal }) {
         price: dest.price || '',
         priceTier: dest.priceTier || null,
         tags: Array.isArray(dest.tags) ? dest.tags : [],
-        categories: Array.isArray(dest.categories) ? dest.categories : [],
+        category: Array.isArray(dest.category) ? dest.category : [],
         bestTime: dest.bestTime || dest.best_time || '',
         // prefer explicit image fields, fall back to name-based lookup
         image: dest.image || dest.imageUrl || getImageForDestination(dest.name) || '',
@@ -1098,7 +1575,7 @@ function Dashboard({ setShowAIModal }) {
   // Personalized recommendations from profile interests
   const [userInterests, setUserInterests] = useState([]);
   const [recoLoading, setRecoLoading] = useState(false);
-  const [recommendedDestinations, setRecommendedDestinations] = useState([]);
+
 
   // Read current user's interests (normalize to labels)
   useEffect(() => {
@@ -1126,35 +1603,13 @@ function Dashboard({ setShowAIModal }) {
       }
       return out;
     };
-    // ADD: generate plural/singular + case variants for Firestore (case-sensitive) matches
+
+    // STRICT: only use categories from INTEREST_RULES (no synonyms), but allow case/plural variants
     const expandForQuery = (values) => {
       const set = new Set();
       const cap = (t) => t.replace(/\b\w/g, (m) => m.toUpperCase());
       const singularize = (t) => t.endsWith('s') ? t.slice(0, -1) : t;
       const pluralize = (t) => t.endsWith('s') ? t : t + 's';
-
-      const synonyms = {
-        Mountain: ['Mountains', 'Volcano', 'Highland', 'Highlands', 'Trail', 'Trails', 'Hiking', 'Hike'],
-        Mountains: ['Mountain', 'Volcano', 'Highland', 'Highlands', 'Trail', 'Trails', 'Hiking', 'Hike'],
-        Park: ['Parks'],
-        Parks: ['Park'],
-        Island: ['Islands', 'Beach'],
-        Islands: ['Island'],
-        Beach: ['Beaches', 'Coast'],
-        Museum: ['Museums'],
-        Museums: ['Museum'],
-        Waterfall: ['Waterfalls'],
-        Waterfalls: ['Waterfall'],
-        Lake: ['Lakes'],
-        Lakes: ['Lake'],
-        Landmark: ['Landmarks'],
-        Landmarks: ['Landmark'],
-        Cultural: [],
-        Heritage: [],
-        Tourist: [],
-        Natural: [],
-        Hiking: ['Hike', 'Trail', 'Trails']
-      };
 
       for (const v of values) {
         if (!v) continue;
@@ -1163,15 +1618,16 @@ function Dashboard({ setShowAIModal }) {
         const title = cap(lc);
         const sing = singularize(title);
         const plur = pluralize(title);
-
-        [base, lc, title, sing, plur].forEach(x => set.add(x));
-        (synonyms[title] || []).forEach(x => {
-          set.add(x);
-          set.add(x.toLowerCase());
-          set.add(cap(x));
-        });
+        [title, lc, sing, plur, sing.toLowerCase(), plur.toLowerCase()].forEach(x => set.add(x));
       }
       return Array.from(set);
+    };
+
+    // canonical compare: lowercase singular
+    const canon = (s) => {
+      let t = (s || '').toString().trim().toLowerCase();
+      if (t.endsWith('s')) t = t.slice(0, -1);
+      return t;
     };
 
     const run = async () => {
@@ -1186,13 +1642,14 @@ function Dashboard({ setShowAIModal }) {
 
         setRecoLoading(true);
 
-        // USE expanded variants for querying (covers Mountain/Mountains and case)
+        // STRICT query terms (case/plural variants only)
         const queryTerms = expandForQuery(targetCatsExact);
 
         const all = new Map();
         const chunkSize = 10;
 
-        const fetchByField = async (field) => {
+        // for array fields
+        const fetchByArrayField = async (field) => {
           for (let i = 0; i < queryTerms.length; i += chunkSize) {
             const chunk = queryTerms.slice(i, i + chunkSize);
             const q = fsQuery(
@@ -1205,19 +1662,38 @@ function Dashboard({ setShowAIModal }) {
           }
         };
 
+        // for string field (category is often a string)
+        const fetchByStringField = async (field) => {
+          for (let i = 0; i < queryTerms.length; i += chunkSize) {
+            const chunk = queryTerms.slice(i, i + chunkSize);
+            const q = fsQuery(
+              collection(db, 'destinations'),
+              fsWhere(field, 'in', chunk),
+              limit(50)
+            );
+            const snap = await getDocs(q);
+            snap.forEach((d) => { if (!all.has(d.id)) all.set(d.id, { id: d.id, ...d.data() }); });
+          }
+        };
+
         await Promise.all([
-          fetchByField('categories'),
-          fetchByField('tags'),
-          fetchByField('Categories')
+          fetchByStringField('category'),
+          fetchByArrayField('categories'),
+          fetchByArrayField('Category'),
+          fetchByArrayField('tags')
         ]);
 
-        // Score overlap vs expanded normalized set
-        const targetSet = new Set(expandForQuery(targetCatsExact).map(norm));
+        // STRICT scoring: only categories present in the rules
+        const allowedCanon = new Set(targetCatsExact.map(canon));
+
         const scored = Array.from(all.values()).map((d) => {
-          const cats = Array.isArray(d.categories) ? d.categories : (Array.isArray(d.Categories) ? d.Categories : []);
-          const tags = Array.isArray(d.tags) ? d.tags : [];
-          const combined = [...cats, ...tags].map(norm);
-          const score = combined.reduce((acc, c) => acc + (targetSet.has(c) ? 1 : 0), 0);
+          const catsArr = Array.isArray(d.categories) ? d.categories
+                        : Array.isArray(d.Category) ? d.Category
+                        : Array.isArray(d.category) ? d.category
+                        : (typeof d.category === 'string' ? [d.category] : []);
+
+          // score using CATEGORIES ONLY
+          const score = catsArr.reduce((acc, c) => acc + (allowedCanon.has(canon(c)) ? 1 : 0), 0);
           return { ...d, _matchScore: score };
         });
 
@@ -1236,7 +1712,20 @@ function Dashboard({ setShowAIModal }) {
             price: d.price || '',
             priceTier: d.priceTier || null,
             tags: Array.isArray(d.tags) ? d.tags : [],
-            categories: Array.isArray(d.categories) ? d.categories : (Array.isArray(d.Categories) ? d.Categories : []),
+            // Normalize category to array (string/array variants)
+            category: Array.isArray(d.category)
+              ? d.category
+              : Array.isArray(d.Category)
+              ? d.Category
+              : Array.isArray(d.categories)
+              ? d.categories
+              : (typeof d.category === 'string' && d.category.trim())
+              ? [d.category.trim()]
+              : (typeof d.Category === 'string' && d.Category.trim())
+              ? [d.Category.trim()]
+              : (typeof d.categories === 'string' && d.categories.trim())
+              ? [d.categories.trim()]
+              : [],
             location: d.location || '',
             image: d.image || d.imageUrl || '',
             bestTime: d.bestTime || '',
@@ -1342,14 +1831,14 @@ function Dashboard({ setShowAIModal }) {
                       )}
                     </div>
                     <div className="dashboard-preview-trip-meta">
-                       <span>
-                         {trip.arrival ? `${trip.arrival}` : ''}
-                         {trip.departure ? ` – ${trip.departure}` : ''}
-                         {trip.activities && Array.isArray(trip.activities)
-                           ? ` • ${trip.activities.length} activit${trip.activities.length === 1 ? 'y' : 'ies'}`
-                           : ''}
-                       </span>
-                     </div>
+                        <span>
+                          {trip.arrival ? `${trip.arrival}` : ''}
+                          {trip.departure ? ` – ${trip.departure}` : ''}
+                          {trip.activities && Array.isArray(trip.activities)
+                            ? ` • ${trip.activities.length} activit${trip.activities.length === 1 ? 'y' : 'ies'}`
+                            : ''}
+                        </span>
+                      </div>
                   </div>
                   {/* three-dot toggle for trips (separate classname to avoid collision) */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1419,13 +1908,13 @@ function Dashboard({ setShowAIModal }) {
                       </div>
                     )}
                   </div>
-                 </div>
-               ))
-             ) : (
-               <div className="dashboard-preview-empty">No trips found. Start planning your first trip!</div>
-             )}
-           </div>
-         </div>
+                  </div>
+                ))
+              ) : (
+                <div className="dashboard-preview-empty">No trips found. Start planning your first trip!</div>
+              )}
+            </div>
+          </div>
         <div className="dashboard-preview-col">
           <div className="dashboard-preview-title">Bookmarks</div>
           <button 
@@ -1529,29 +2018,51 @@ function Dashboard({ setShowAIModal }) {
                       </div>
                     )}
                   </div>
-                 </div>
-               ))
-             )}
-           </div>
-         </div>
-       </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
 
       {/* Personalized Section */}
-      <div className="personalized-section-dashboard">
-        <div className="personalized-title">Personalized for You</div>
+    <div className="personalized-section-dashboard">
+      <div className="personalized-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+        <span>Personalized for You</span>
+        {/* Filter: Sort by rating */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label htmlFor="personalized-sort" style={{ fontSize: 15, color: '#64748b' }}>Sort by:</label>
+          <select
+            id="personalized-sort"
+            value={personalizedSort}
+            onChange={e => setPersonalizedSort(e.target.value)}
+            style={{
+              borderRadius: 8,
+              border: '1px solid #e5e7eb',
+              padding: '4px 10px',
+              fontSize: 14,
+              background: '#f8fafc',
+              color: '#334155'
+            }}
+          >
+            <option value="rating-desc" className='description'>Highest Rating</option>
+            <option value="rating-asc" className='description'>Lowest Rating</option>
+          </select>
+        </div>
+      </div>
 
-        {recoLoading && (
-          <div className="dashboard-preview-empty">Finding destinations based on your interests…</div>
-        )}
+      {recoLoading && (
+        <div className="dashboard-preview-empty">Finding destinations based on your interests…</div>
+      )}
 
-        {!recoLoading && recommendedDestinations.length === 0 && (
-          <div className="dashboard-preview-empty">
-            No personalized destinations yet. Add interests on your profile to get recommendations.
-          </div>
-        )}
+      {!recoLoading && sortedRecommendedDestinations.length === 0 && (
+        <div className="dashboard-preview-empty">
+          No personalized destinations yet. Add interests on your profile to get recommendations.
+        </div>
+      )}
 
         <div className="personalized-cards-grid">
-          {recommendedDestinations.map((d) => (
+          {sortedRecommendedDestinations.map((d) => (
             <div className="grid-card-anim" key={d.id}>
               <div className="grid-card">
                 <div className="card-image">
@@ -1585,7 +2096,7 @@ function Dashboard({ setShowAIModal }) {
                 <div className="card-header">
                   <h2>{d.name}</h2>
                   <div className="mini-rating" title="Average Rating">
-                    <span>⭐</span> {Number(d.rating || 0) > 0 ? Number(d.rating).toFixed(1) : '—'}
+                    <span>⭐</span> {Number(d.rating || 0) > 0 ? Number(d.rating).toFixed(1) : '0'}
                   </div>
                 </div>
 
@@ -1626,7 +2137,7 @@ function Dashboard({ setShowAIModal }) {
               ✕
             </button>
 
-            <div className="details-hero">
+            <div className="details-hero1">
               <div className="details-hero-image">
                 {cloudImages.length === 0 ? (
                   <div style={{ width: "100%", height: 240, background: "#e0e7ef", borderRadius: 16 }} />
@@ -1648,30 +2159,52 @@ function Dashboard({ setShowAIModal }) {
               </div>
             </div>
 
-            <div className="details-body">
+            <div className="details-body1">
               <div className="details-head-row">
                 <div className="details-title-col">
                   <h2 className="details-title">{selectedCard.name}</h2>
-                  <a href="#" className="details-region" onClick={(e) => e.preventDefault()}>
+                  <a href="https://maps.google.com" className="details-region" onClick={(e) => e.preventDefault()}>
                     {selectedCard.region}
                   </a>
-
                   <div className="details-rating-row">
                     <span className="star">⭐</span>
-                    <span className="avg">
-                      {Number(selectedCard.rating || 0) > 0 ? Number(selectedCard.rating).toFixed(1) : '—'}
+                    <span className="muted">
+                      {(personalizedRatingsByDest[selectedCard.id]?.count ?? 0) > 0
+                        ? (personalizedRatingsByDest[selectedCard.id].avg).toFixed(1)
+                        : '0'}
                     </span>
                     <span className="muted"> (Average Rating)</span>
-                    <span className="muted sep">Your Rating:</span>
+                    <span className="muted">
+                      ({personalizedRatingsCountByDest[selectedCard.id] !== undefined
+                        ? personalizedRatingsCountByDest[selectedCard.id]
+                        : 0} ratings)
+                    </span>
+                    <span className="muted sep">Rating:</span>
                     <div className="your-stars">
                       {[1, 2, 3, 4, 5].map((n) => (
-                        <button key={n} className="star-btn" disabled aria-label={`${n} star${n>1?'s':''}`}>★</button>
+                        <button
+                          key={n}
+                          className={`star-btn ${personalizedUserRating >= n ? 'filled' : ''}`}
+                          onClick={() => ratePersonalizedSelected(n)}
+                          disabled={personalizedSavingRating}
+                          aria-label={`${n} star${n > 1 ? 's' : ''}`}
+                          title={`${n} star${n > 1 ? 's' : ''}`}
+                        >
+                          ★
+                        </button>
                       ))}
                     </div>
+                    <span className="muted sep">
+                      Reviews: {
+                        userReviewsCountByDest[selected.id] !== undefined
+                          ? userReviewsCountByDest[selected.id]
+                          : 0
+                      }
+                    </span>
                   </div>
                 </div>
 
-                <div className="details-actions">
+                <div className="details-actions1">
                   <button 
                     className={`btn-outline ${personalizedBookmarks[selectedCard.id] ? 'active' : ''}`}
                     onClick={() => handlePersonalizedBookmark(selectedCard.id)}
@@ -1709,34 +2242,184 @@ function Dashboard({ setShowAIModal }) {
                     ))}
                   </div>
 
+                  <div className="section-title">Price Breakdown:</div>
+                    <div style={{ fontWeight: '300', fontStyle: 'italic', justifyContent: 'left', textAlign: 'left', marginBottom: '10px' }}>Price may vary on different factors</div>
+                    <div className="breakdown-box">
+                    {(() => {
+                      // Use budget if available, otherwise use price
+                      const budgetOrPrice = selected.budget || selected.price;
+                      if (!budgetOrPrice) return null;
+
+                      const breakdownArr = getBreakdown(budgetOrPrice);
+                      if (!breakdownArr.length) return <span>No breakdown available.</span>;
+                      return (
+                        <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6', justifyContent: 'left', textAlign: 'left' }}>
+                          {breakdownArr.map((item, i) => (
+                            <li key={i}>{item}</li>
+                          ))}
+                        </ul>
+                      );
+                    })()}
+                    </div>
+
+                  <div className="section-title">Additional Fees:</div>
+                  <div style={{ fontWeight: '300', fontStyle: 'italic', justifyContent: 'left', textAlign: 'left', marginBottom: '10px' }}>Price may vary on different class</div>
+                  <div className="breakdown-box" style={{textAlign: 'left'}}>
+                    {/* NEW: Fare checkboxes */}
+                    <div style={{ marginBottom: 10 }}>
+                      {fareOptions.map(opt => (
+                        <label key={opt.value} style={{ display: 'block', marginBottom: 2, fontWeight: 'normal', fontSize: 14 }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedFares.includes(opt.value)}
+                            onChange={e => {
+                              setSelectedFares(prev => {
+                                if (e.target.checked) return [...prev, opt.value];
+                                return prev.filter(v => v !== opt.value);
+                              });
+                            }}
+                          />
+                          <span style={{ marginLeft: 6 }}>{opt.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {selected && (
+                    <div style={{ marginBottom: 24 }}>
+                      <div className="section-title" style={{ marginBottom: 8 }}>User Reviews</div>
+                      <ReviewsList destId={selected.id} currentUser={currentUser} />
+                    </div>
+                  )}
+                  
+                  <div className="section-title">Write a Review</div>
+                  <div
+                    className="review-box"
+                    style={{
+                      width: '100%',
+                      gridColumn: '1 / -1',
+                      marginBottom: 18,
+                      zIndex: 1
+                    }}
+                  >
+                    <WriteReview
+                      destId={selected.id}
+                      user={auth.currentUser || currentUser}
+                      onReviewSaved={() => {
+                        (async () => {
+                          try {
+                            const reviewsSnap = await getDocs(collection(db, 'destinations', selected.id, 'reviews'));
+                            setUserReviewsCountByDest(prev => ({
+                              ...prev,
+                              [selected.id]: reviewsSnap.size || 0
+                            }));
+                          } catch (e) {}
+                        })();
+                      }}
+                    />
+                  </div>
+
                   <div className="section-title">Packing Suggestions</div>
                   <div className="packing-box">
-                    {selectedCard.packingSuggestions || "No packing suggestions available."}
+                    {(() => {
+                      if (!selected) return <div className="packing-empty">No packing suggestions available.</div>;
+
+                      let raw = selected.packingSuggestions || selected.packing || "";
+                      if (Array.isArray(raw) && raw.length > 0) {
+                        return (
+                          <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6', textAlign: 'left' }}>
+                            {raw.map((s, i) => <li key={i}>{s}</li>)}
+                          </ul>
+                        );
+                      }
+                      if (typeof raw === "string" && raw.trim().length > 0) {
+                        // Split by line or bullet for display
+                        const lines = raw.split(/[\n•\-*]/).map(l => l.trim()).filter(Boolean);
+                        if (lines.length > 0) {
+                          return (
+                            <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6', textAlign: 'left' }}>
+                              {lines.map((s, i) => <li key={i}>{s}</li>)}
+                            </ul>
+                          );
+                        }
+                      }
+
+                      const { category: packingCategory } = require('./rules');
+                      let cats =
+                        Array.isArray(selected.category)
+                          ? selected.category
+                          : Array.isArray(selected.categories)
+                          ? selected.categories
+                          : typeof selected.category === "string"
+                          ? [selected.category]
+                          : typeof selected.categories === "string"
+                          ? [selected.categories]
+                          : [];
+
+                      let found = [];
+                      for (let c of cats) {
+                        if (!c) continue;
+                        const key = c.trim().toLowerCase();
+                        if (packingCategory[key]) {
+                          found = packingCategory[key];
+                          break;
+                        }
+                        const singular = key.endsWith("s") ? key.slice(0, -1) : key;
+                        if (packingCategory[singular]) {
+                          found = packingCategory[singular];
+                          break;
+                        }
+                      }
+                      if (found.length > 0) {
+                        return (
+                          <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6', textAlign: 'left' }}>
+                            {found.map((s, i) => <li key={i}>{s}</li>)}
+                          </ul>
+                        );
+                      }
+
+                      return <div className="packing-empty">No packing suggestions available.</div>;
+                    })()}
                   </div>
                 </div>
 
-                <aside className="trip-info-box">
-                  <div className="trip-title">Trip Information</div>
+                <aside className="trip-info-box" style={{ textAlign: 'center',alignItems: 'center', justifyContent: 'center'}}>
+                  <div className="trip-title" style={{ alignItems: 'center', justifyContent: 'center'}}>Trip Information</div>
 
                   <div className="trip-item">
-                    <div className="trip-label">Price</div>
-                    <span
-                      className={`pill small ${selectedCard.priceTier === 'less' ? 'pill-green' : 'pill-gray'}`}
-                      title={selectedCard.priceTier === 'less' ? 'Less Expensive tier' : 'Expensive tier'}
+                    <div className="trip-label" style={{ textAlign: 'center',alignItems: 'center', justifyContent: 'center'}}>Price</div>
+                    <span style={{alignItems: 'center', justifyContent: 'center'}}
+                      className={`pill small ${
+                        selected.priceTier === 'less' ? 'pill-green' : 'pill-gray'
+                      }`}
+                      title={selected.priceTier === 'less' ? 'Less Expensive tier' : 'Expensive tier'}
                     >
-                      {formatPeso(selectedCard.price)}
+                      {/* CHANGED: show total price if fare selected */}
+                      {selectedFares.length > 0
+                        ? `₱${getTotalPrice(selected.price).toLocaleString()}`
+                        : formatPeso(selected.price)}
                     </span>
                   </div>
 
                   <div className="trip-item">
-                    <div className="trip-label">Best Time to Visit</div>
-                    <div className="trip-text">{selectedCard.bestTime || '—'}</div>
+                    <div className="trip-label" style={{ textAlign: 'center',alignItems: 'center', justifyContent: 'center'}}>Best Time to Visit</div>
+                    <div className="trip-text" style={{ textAlign: 'center',alignItems: 'center', justifyContent: 'center'}}>{selectedCard.bestTime || '—'}</div>
                   </div>
 
                   <div className="trip-item">
-                    <div className="trip-label">Categories</div>
+                    <div className="trip-label" style={{ textAlign: 'center',alignItems: 'center', justifyContent: 'center'}}>Categories</div>
                     <div className="badge-row">
-                      {(selectedCard.categories || selectedCard.tags || []).slice(0, 6).map((c, i) => (
+                      {(
+                        Array.isArray(selectedCard.category)
+                          ? selectedCard.category
+                          : Array.isArray(selectedCard.categories)
+                          ? selectedCard.categories
+                          : typeof selectedCard.category === 'string'
+                          ? [selectedCard.category]
+                          : typeof selectedCard.categories === 'string'
+                          ? [selectedCard.categories]
+                          : []
+                      ).slice(0, 6).map((c, i) => (
                         <span key={i} className="badge purple">{c}</span>
                       ))}
                     </div>
@@ -1744,9 +2427,9 @@ function Dashboard({ setShowAIModal }) {
 
                   {selectedCard.location && (
                     <div className="trip-item">
-                      <div className="trip-label">Location</div>
+                      <div className="trip-label" style={{ textAlign: 'center',alignItems: 'center', justifyContent: 'center'}}>Location</div>
                       <div className="badge-row">
-                        <span className="badge blue">{selectedCard.location}</span>
+                        <span className="badge blue" style={{alignItems: 'center', justifyContent: 'center'}}>{selectedCard.location}</span>
                       </div>
                     </div>
                   )}
@@ -1756,6 +2439,7 @@ function Dashboard({ setShowAIModal }) {
           </div>
         </div>
       )}
+      
 
       {/* Trip Summary Modal (in-place) */}
       {showTripSummaryModal && summaryTrip && (
@@ -1774,4 +2458,388 @@ function Dashboard({ setShowAIModal }) {
   );
 }
 
+
 export default Dashboard;
+
+function WriteReview({ destId, user, onReviewSaved }) {
+  const [review, setReview] = useState('');
+  const [star, setStar] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState('');
+  const [error, setError] = useState('');
+  const [alreadyReviewed, setAlreadyReviewed] = useState(false);
+  const [checkingReview, setCheckingReview] = useState(true); // <-- NEW
+
+  useEffect(() => {
+    let ignore = false;
+    async function checkExistingReview() {
+      if (!user || !destId) {
+        if (!ignore) { setAlreadyReviewed(false); setCheckingReview(false); }
+        return;
+      }
+      try {
+        setCheckingReview(true);
+        const reviewDoc = await getDoc(doc(db, "destinations", String(destId), "reviews", user.uid));
+        if (!ignore) setAlreadyReviewed(reviewDoc.exists());
+      } catch {
+        if (!ignore) setAlreadyReviewed(false);
+      } finally {
+        if (!ignore) setCheckingReview(false);
+      }
+    }
+    checkExistingReview();
+    return () => { ignore = true; };
+  }, [user, destId, success]);
+
+  useEffect(() => {
+    if (!user || !destId) return;
+    let ignore = false;
+    async function fetchUserRating() {
+      try {
+        const ratingDoc = await getDoc(doc(db, "destinations", String(destId), "ratings", user.uid));
+        if (!ignore) setStar(Number(ratingDoc.data()?.value) || 0);
+      } catch {
+        if (!ignore) setStar(0);
+      }
+    }
+    fetchUserRating();
+    return () => { ignore = true; };
+  }, [user, destId, success]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      if (!user) throw new Error("You must be signed in to write a review.");
+      if (!review.trim()) throw new Error("Review cannot be empty.");
+      if (star < 1 || star > 5) throw new Error("Please select a star rating.");
+
+      // Hard block in a transaction
+      await runTransaction(db, async (tx) => {
+        const reviewRef = doc(db, "destinations", String(destId), "reviews", user.uid);
+        const snap = await tx.get(reviewRef);
+        if (snap.exists()) {
+          throw new Error("You have already submitted a review for this destination.");
+        }
+        const reviewData = {
+          userId: user.uid,
+          userName: user.displayName || user.email || "Anonymous",
+          review: review.trim(),
+          rating: star,
+          createdAt: new Date().toISOString(),
+        };
+        tx.set(reviewRef, reviewData); // create only once
+
+        const ratingRef = doc(db, "destinations", String(destId), "ratings", user.uid);
+        tx.set(
+          ratingRef,
+          {
+            value: star,
+            userId: user.uid,
+            updatedAt: serverTimestamp(),
+            name: user.displayName || user.email || "Anonymous",
+          },
+          { merge: true }
+        );
+      });
+
+      setSuccess("Review submitted!");
+      setAlreadyReviewed(true); // block immediately in UI
+      setReview('');
+      setStar(0);
+      if (onReviewSaved) onReviewSaved();
+    } catch (err) {
+      setError(err.message || "Failed to submit review.");
+      console.error("Firestore error:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+  
+  if (checkingReview) {
+    return <div style={{ color: "#64748b", marginBottom: 8 }}>Checking existing review…</div>;
+  }
+  if (alreadyReviewed && !success) {
+    return (
+      <div
+        role="status"
+        style={{
+          width: '100%',
+          textAlign: 'center',
+          color: '#0862ea',     // blue
+          fontWeight: 600,
+          fontSize: 14,
+          lineHeight: 1.35,
+          padding: '8px 0',
+          margin: '2px 0 10px 0'
+        }}
+      >
+        You have already submitted a review for this destination.
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {alreadyReviewed && !success && (
+        <div style={{ color: "#0862eaff", fontWeight: 500, marginBottom: 8 }}>
+          You have already submitted a review for this destination.
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <span style={{ fontWeight: 500, fontSize: 13 }}>Your Rating:</span>
+        {[1, 2, 3, 4, 5].map(n => (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setStar(n)}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: alreadyReviewed || saving ? 'not-allowed' : 'pointer',
+              fontSize: 18,
+              color: n <= star ? '#ffb300' : '#d1d5db',
+              padding: 0,
+              marginRight: 2,
+              transition: 'color 0.15s',
+              outline: 'none'
+            }}
+            disabled={alreadyReviewed || saving}
+            aria-label={`${n} star${n > 1 ? 's' : ''}`}
+          >
+            ★
+          </button>
+        ))}
+      </div>
+      <div style={{ position: 'relative' }}>
+        <textarea
+          value={review}
+          onChange={e => setReview(e.target.value)}
+          placeholder={alreadyReviewed ? "You have already submitted a review." : "Write your review here..."}
+          rows={3}
+          style={{
+            width: '100%',
+            borderRadius: 8,
+            border: '1px solid #e5e7eb',
+            padding: 12,
+            paddingRight: 50,
+            fontSize: 15,
+            resize: 'vertical'
+          }}
+          disabled={checkingReview || saving || alreadyReviewed}
+        />
+        <button
+          type="submit"
+          aria-label="Submit review"
+          disabled={checkingReview || saving || !review.trim() || alreadyReviewed || star < 1}
+          style={{
+            position: 'absolute',
+            right: 8,
+            bottom: 8,
+            width: 36,
+            height: 36,
+            borderRadius: '999px',
+            background: 'transparent',
+            border: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: saving || !review.trim() || alreadyReviewed || star < 1 ? 'not-allowed' : 'pointer',
+            opacity: saving || !review.trim() || alreadyReviewed || star < 1 ? 0.6 : 1
+          }}
+        >
+          <img src="send.png" alt="Send" style={{ width: 18, height: 18 }} />
+        </button>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {success && <span style={{ color: "#22c55e" }}>{success}</span>}
+        {error && <span style={{ color: "#e74c3c" }}>{error}</span>}
+      </div>
+    </form>
+  );
+}
+// ...existing code...
+function ReviewsList({ destId, currentUser }) {
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [userRating, setUserRating] = useState(null);
+
+  useEffect(() => {
+    let ignore = false;
+    async function fetchReviews() {
+      setLoading(true);
+      try {
+        const snap = await getDocs(collection(db, "destinations", String(destId), "reviews"));
+        let arr = [];
+        snap.forEach(docSnap => {
+          const data = docSnap.data() || {};
+          // parse rating even if it is a string; allow legacy fields
+          const parsedRating = Number(
+            data.rating ?? data.value ?? data.stars ?? data.rate ?? 0
+          ) || 0;
+
+          arr.push({
+            id: docSnap.id,                  // uid of reviewer
+            userName: data.userName || "Anonymous",
+            review: data.review || "",
+            createdAt: data.createdAt,
+            userId: data.userId,
+            rating: parsedRating,            // may still be 0 if legacy review
+          });
+        });
+
+        // backfill rating from /ratings subcollection for legacy reviews
+        arr = await Promise.all(
+          arr.map(async (r) => {
+            if (r.rating > 0) return r;
+            try {
+              const rSnap = await getDoc(doc(db, "destinations", String(destId), "ratings", r.id));
+              const v = Number(rSnap.data()?.value) || 0;
+              return { ...r, rating: v };
+            } catch {
+              return r;
+            }
+          })
+        );
+
+        // newest first
+        arr.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+        if (!ignore) setReviews(arr);
+      } catch {
+        if (!ignore) setReviews([]);
+      }
+      setLoading(false);
+    }
+    if (destId) fetchReviews();
+    return () => { ignore = true; };
+  }, [destId]);
+
+
+  useEffect(() => {
+    if (!currentUser || !destId) { setUserRating(null); return; }
+    let ignore = false;
+    async function fetchUserRating() {
+      try {
+        const ratingDoc = await getDoc(doc(db, "destinations", String(destId), "ratings", currentUser.uid));
+        if (!ignore) setUserRating(Number(ratingDoc.data()?.value) || null);
+      } catch {
+        if (!ignore) setUserRating(null);
+      }
+    }
+    fetchUserRating();
+    return () => { ignore = true; };
+  }, [currentUser, destId]);
+
+  if (loading) return <div style={{ color: "#888", fontSize: 14 }}>Loading reviews…</div>;
+  if (!reviews.length) return <div style={{ color: "#888", fontSize: 14 }}>No user reviews yet.</div>;
+
+  // Separate current user's review if available
+  let userReview = null;
+  let otherReviews = reviews;
+  if (currentUser) {
+    userReview = reviews.find(r => r.id === currentUser.uid); // Use doc ID for review
+    otherReviews = reviews.filter(r => r.id !== currentUser.uid);
+  }
+
+  // Star rendering helper
+  const renderStars = (rating) => (
+    <span style={{ marginLeft: 8, marginRight: 8 }}>
+      {Array.from({ length: 5 }).map((_, idx) => (
+        <span
+          key={idx}
+          style={{
+            color: idx < rating ? "#ffb300" : "#d1d5db",
+            fontSize: 18,
+            marginRight: 2,
+            verticalAlign: "middle",
+            fontFamily: "Arial, sans-serif",
+          }}
+        >
+          ★
+        </span>
+      ))}
+    </span>
+  );
+
+  const userStars = (userReview && Number(userReview.rating) > 0)
+  ? Number(userReview.rating)
+  : Number(userRating || 0);
+
+  // Card style for all reviews
+  const cardStyle = {
+    background: "#e0f7fa",
+    border: "2px solid #38bdf8",
+    borderRadius: 16,
+    padding: "12px 16px",
+    fontSize: 18,
+    boxShadow: "0 1px 2px rgba(0,0,0,.03)",
+    marginBottom: 0,
+    marginTop: 0,
+    marginLeft: 0,
+    marginRight: 0,
+    minWidth: 220,
+    maxWidth: 600,
+    width: "100%",
+    boxSizing: "border-box"
+  };
+
+  const nameStyle = {
+    fontWeight: 700,
+    color: "#2196f3",
+    fontSize: 14,
+    marginRight: 10,
+    marginBottom: 0,
+    display: "inline-block"
+  };
+
+  const dateStyle = {
+    color: "#6b7280",
+    fontSize: 12,
+    marginBottom: 0,
+    display: "block",
+    textAlign: "left",
+  };
+
+  const reviewTextStyle = {
+    marginTop: 10,
+    marginLeft: 15,
+    marginBottom: 10,
+    fontSize: 14,
+    color: "#222",
+    textAlign: "left",
+    fontFamily: "inherit",
+    fontWeight: 400,
+    wordBreak: "break-word"
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {userReview && (
+        <div key={userReview.id} style={cardStyle}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 0, flexWrap: "wrap" }}>
+            <span style={nameStyle}>
+              {userReview.userName} (You)
+            </span>
+            {renderStars(userStars, 24)}
+          </div>
+          <span style={dateStyle}>
+            {userReview.createdAt ? new Date(userReview.createdAt).toLocaleString() : ""}
+          </span>
+          <div style={reviewTextStyle}>{userReview.review}</div>
+        </div>
+      )}
+      {otherReviews.map((r) => (
+        <div key={r.id} style={{ ...cardStyle, background: "#f8fafc", border: "1.5px solid #b6c7d6", color: "#222" }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 0, flexWrap: "wrap" }}>
+            <span style={{ ...nameStyle, color: "#0d47a1" }}>{r.userName}</span>
+            {renderStars(Number(r.rating) || 0, 22)}
+          </div>
+          <span style={dateStyle}>{r.createdAt ? new Date(r.createdAt).toLocaleString() : ""}</span>
+          <div style={reviewTextStyle}>{r.review}</div>
+        </div>
+      ))}
+    </div>
+  );
+}

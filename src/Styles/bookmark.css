@@ -4,7 +4,7 @@
   justify-content: left;
   padding: 40px;
   padding-top: 50px;
-  background-color: #fff;
+
 }
 
 .bookmark-section {
@@ -22,9 +22,50 @@
 /* Card grid */
 .bookmarks-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
-  gap: 28px;
-  padding: 8px 8px 24px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap:140px;
+  padding: 0;
+  margin: 0 auto; /* ADD THIS - centers the grid */
+  max-width: 1700px; /* ADD THIS - constrains width for better centering */
+  justify-items: center; /* ADD THIS - centers cards within grid cells */
+}
+
+/* Alternative approach - if you want the grid itself centered with cards left-aligned */
+.bookmarks-grid-alt {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 24px;
+  padding: 0;
+  margin: 0 auto;
+  max-width: 1400px;
+  justify-content: center; /* Centers the grid columns */
+}
+
+/* Update responsive breakpoints */
+@media (max-width: 1400px) {
+  .bookmarks-grid {
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    max-width: 1200px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .bookmarks-grid {
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    max-width: 900px;
+  }
+}
+
+@media (max-width: 768px) {
+  .bookmarks-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    max-width: 500px;
+  }
+  
+  .bm-card {
+    max-width: 100%;
+  }
 }
 
 /* Card shell */
@@ -69,7 +110,7 @@
 .bm-card-title { font-size: 1.22rem; margin: 0; color: #0f172a; }
 .bm-card-rating { color: #0f172a; font-weight: 600; }
 .bm-region-link { display: block; color: #2563eb; margin: 2px 0 8px; font-size: .92rem; text-align: left; }
-.bm-card-desc { margin: 8px 0 12px; color: #334155; }
+.bm-card-desc { margin: 8px 0 12px; color: #334155; text-align: left !important;}
 
 .bm-info-box {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
@@ -435,7 +476,7 @@
 
 /* Page backdrop like the screenshot */
 .bm-page {
-  background: linear-gradient(180deg, #eaf0ff 0%, #eef4ff 60%, #f6f8ff 100%);
+
   min-height: 100vh;
   padding: 24px;
   margin-top: 60px;
@@ -629,14 +670,34 @@
   }
 }
 .bm-modal-close {
-  position: absolute; top: 14px; right: 14px;
-  width: 36px; height: 36px; border-radius: 999px; border: none;
-  background: #eef2ff; color: #0f172a; cursor: pointer;
-  box-shadow: 0 6px 16px rgba(2,6,23,.2);
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  background: rgba(255,255,255,0.85);
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  font-size: 1.5rem;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
 }
+.bm-modal-close:hover {
+  background: #f3f4f6;
+}
+/* Make sure .bm-modal is position:relative */
+.bm-modal {
+  position: relative;
+}
+/* ...existing code... */
 
 /* Hero art identical style */
-.bm-modal-hero { height: 190px; position: relative; overflow: hidden; }
+.bm-modal-hero { height: 300px; position: relative; overflow: hidden; }
 .bm-modal-sky { position: absolute; inset: 0;
   background: linear-gradient(180deg, #93c5fd 0%, #60a5fa 100%); }
 .bm-modal-wave { position: absolute; left:0; right:0; bottom:0; height: 70px;
@@ -700,6 +761,8 @@
 .bm-info-key { color:#334155; font-weight:600;}
 .bm-info-val { color:#0f172a;}
 .chip-green { background:#dcfce7; color:#065f46; border-radius:999px; padding:6px 10px; font-weight:600; }
+.badge.blue { background: #e8f0fe; color: #1e40af; width: auto; text-align: center; height: auto; border-radius: 10px;}
+
 
 /* Modal actions */
 .bm-modal-actions { display:flex; gap:12px; margin-top: 14px; }
@@ -765,7 +828,7 @@
 
   .bm-card-title { font-size: 1.1rem; }
   .bm-region-link { font-size: 0.9rem; }
-  .bm-card-desc { margin: 6px 0 10px; }
+  .bm-card-desc { margin: 6px 0 10px; text-align: left !important; }
 
   .bm-info-box {
     grid-template-columns: 1fr;   /* stack info pills */
@@ -946,6 +1009,7 @@
     font-size: 0.9rem;
     line-height: 1.4;
     margin: 6px 0 10px;
+    text-align: left !important;
   }
 
   /* Info box - stack vertically */
@@ -1223,6 +1287,7 @@
 
   .bm-card-desc {
     font-size: 0.85rem;
+    text-align: left !important;
   }
 
   .bm-actions {
@@ -1342,4 +1407,70 @@
 .bm-modal {
   z-index: 100001;
   position: relative;
+}
+
+@media (max-width: 450px) {
+  .bm-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    margin-top: 60px;
+  }
+}
+
+@media (max-width: 900px) {
+  .bm-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    margin-top: 60px;
+  }
+}
+
+@media (min-width: 400px) {
+  .bm-trash-responsive {
+    display: inline;
+  }
+}
+@media (max-width: 769px) {
+  .bm-trash-responsive {
+    display: inline;
+  }
+
+} 
+
+@media (min-width: 400px) {
+  .bm-trash-responsive + span,
+  .itn-btn.danger > span:not(.bm-trash-responsive) {
+    display: none;
+  }
+}
+
+@media (max-width: 769px) {
+  .bm-trash-responsive + span,
+  .itn-btn.danger > span:not(.bm-trash-responsive) {
+    display: none;
+  }
+}
+
+.bm-remove-text {
+  display: none;
+}
+
+@media (min-width: 400px) {
+  .bm-remove-text {
+    display: none !important;
+  }
+}
+
+@media (max-width: 769px) {
+  .bm-remove-text {
+    display: none !important;
+  }
+}
+
+@media (min-width: 770px) {
+  .bm-remove-text {
+    display: inline !important;
+  }
 }

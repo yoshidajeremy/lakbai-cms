@@ -19,6 +19,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import ImagesCMS from './images-cms';
 import NotFoundCMS from './notfound-cms';
 import destImages from './dest-images.json';
+import DatasetCMS from './dataset-cms';
 
 
 // Cloudinary config
@@ -1424,7 +1425,7 @@ useEffect(() => {
             <span className="icon">🖼️</span> <span>Images</span>
           </button>
           <button className={`sidebar-item ${active === 'dataset' ? 'active' : ''}`} onClick={() => setActive('dataset')}>
-            <span className="icon">📊</span> <span>Datasets</span>
+            <span className="icon">📂</span> <span>Files</span>
           </button>
         </nav>
 
@@ -2284,6 +2285,7 @@ useEffect(() => {
             </div>
           </div>
         )}
+        {active === 'dataset' && <DatasetCMS />}
       </main>
 
   {deleteConfirmOpen && deleteTarget && (
