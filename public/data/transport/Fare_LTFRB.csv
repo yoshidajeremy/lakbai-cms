@@ -1,6 +1,6 @@
 Vehicle Type,Sub-Type,Base Rate(First 5 or 4 kilometers),Rate per km (₱),Per Minute Travel time,Total Price (₱)
 PUB City,Aircon Bus,15,2.65,0,
-PUB City,Ordinary Bus,20,2.25,0,
+PUB City,Ordinary Bus,13,2.25,0,
 "PUB
 Provincial",Aircon Bus,10.50,2.10,0,
 "PUB
