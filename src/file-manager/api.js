@@ -1,65 +1,56 @@
 // Simple client for the Files API (Cloud Function HTTP endpoints)
-
+//
 // Pick API base depending on environment.
-// - Production: rely on Hosting rewrite -> "/api/files"
-// - Development: set REACT_APP_FUNCTIONS_ORIGIN to emulator or deployed origin to bypass CRA proxy.
+// - Production: rely on Hosting rewrite -> "/api"
+// - Development: set REACT_APP_FUNCTIONS_ORIGIN to emulator or deployed origin.
 const origin =
   process.env.REACT_APP_FUNCTIONS_ORIGIN &&
-  process.env.REACT_APP_FUNCTIONS_ORIGIN.replace(/\/+$/,''); // e.g. http://localhost:5001/<projectId>/us-central1 or https://us-central1-<projectId>.cloudfunctions.net
+  process.env.REACT_APP_FUNCTIONS_ORIGIN.replace(/\/+$/,'');
 
-const BASE = origin ? `${origin}/api/files` : '/api/files';
+const BASE = origin ? `${origin}/api` : `/api`;
 
-async function json(res) {
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(text || `HTTP ${res.status}`);
+async function req(path, { method = 'GET', body } = {}) {
+  const headers = { 'Accept': 'application/json' };
+  const init = { method, headers, credentials: 'omit' }; // no cookies -> avoid CORS "include" issues
+  if (body) {
+    headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
   }
-  return res.json();
+  const res = await fetch(`${BASE}${path}`, init);
+  const text = await res.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) {
+    const msg = (data && data.error) || (typeof data === 'string' ? data : res.statusText);
+    throw new Error(msg || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function normalizeList(res) {
+  if (Array.isArray(res)) return res;
+  if (res && Array.isArray(res.items)) return res.items;
+  return [];
 }
 
 export const filesApi = {
-  list: async (path = 'public') => {
-    const res = await fetch(`${BASE}/list?path=${encodeURIComponent(path)}`, { credentials: 'include' });
-    return json(res);
+  async list(path) {
+    const res = await req(`/files/list?path=${encodeURIComponent(path)}`);
+    return normalizeList(res);
   },
-  get: async (path) => {
-    const res = await fetch(`${BASE}/get?path=${encodeURIComponent(path)}`, { credentials: 'include' });
-    return json(res);
+  get(path) {
+    return req(`/files/get?path=${encodeURIComponent(path)}`);
   },
-  upload: async ({ path, contentBase64, message }) => {
-    const res = await fetch(`${BASE}/upload`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ path, contentBase64, message }),
-    });
-    return json(res);
+  upload(payload) {
+    return req(`/files/upload`, { method: 'POST', body: payload });
   },
-  mkdir: async ({ path, message }) => {
-    const res = await fetch(`${BASE}/mkdir`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ path, message }),
-    });
-    return json(res);
+  mkdir(payload) {
+    return req(`/files/mkdir`, { method: 'POST', body: payload });
   },
-  rename: async ({ fromPath, toPath, message }) => {
-    const res = await fetch(`${BASE}/rename`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ fromPath, toPath, message }),
-    });
-    return json(res);
+  rename(payload) {
+    return req(`/files/rename`, { method: 'POST', body: payload });
   },
-  delete: async ({ path, message }) => {
-    const res = await fetch(`${BASE}/delete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ path, message }),
-    });
-    return json(res);
+  delete(payload) {
+    return req(`/files/delete`, { method: 'POST', body: payload });
   },
 };

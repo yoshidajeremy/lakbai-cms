@@ -25,7 +25,8 @@ app.set('trust proxy', 1);
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-app.use('/files', filesRouter);
+// mount for both local (no hosting rewrite) and prod (rewritten to /api)
+app.use(['/files', '/api/files'], filesRouter);
 
 // Export as https function
 exports.api = httpsV2.onRequest({ cpu: 2, memory: '512MiB', timeoutSeconds: 60 }, app);

@@ -40,7 +40,7 @@ function normalizeCsvRows(rows, minCols = 1) {
     return rows.map(r => [...r, ...Array(maxCols - r.length).fill('')]);
 }
 
-export default function FileManager({ root = 'public' }) {
+export default function FileManager({ root = process.env.REACT_APP_FILES_ROOT || '' }) {
     const [cwd, setCwd] = React.useState(root);           // e.g. "public", "public/images"
     const [items, setItems] = React.useState([]);
     const [loading, setLoading] = React.useState(false);
@@ -69,17 +69,19 @@ const segments = cwd.split('/').filter(Boolean);
 
 
 const refresh = React.useCallback(async () => {
-    setLoading(true); setError('');
-    try {
+  setLoading(true); setError('');
+  try {
     const data = await filesApi.list(cwd);
+    const list = Array.isArray(data) ? data : []; // guard
     // normalize: directories first
-    data.sort((a, b) => (a.type === b.type) ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1));
-    setItems(data);
-    } catch (e) {
-    setError(e.message || String(e));
-    } finally {
+    list.sort((a, b) => (a.type === b.type) ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1));
+    setItems(list);
+  } catch (e) {
+    setItems([]);
+    setError(e?.message || String(e));
+  } finally {
     setLoading(false);
-    }
+  }
 }, [cwd]);
 
 React.useEffect(() => { refresh(); }, [refresh]);
