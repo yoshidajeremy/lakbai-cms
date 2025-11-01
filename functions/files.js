@@ -31,21 +31,15 @@ router.use((req, res, next) => {
 });
 
 function getEnv() {
-  const {
-    github: { token, owner, repo, branch } = {},
-  } = process.env.FUNCTIONS_EMULATOR ? {
-    github: {
-      token: process.env.GITHUB_TOKEN,
-      owner: process.env.GITHUB_OWNER,
-      repo: process.env.GITHUB_REPO,
-      branch: process.env.GITHUB_BRANCH || 'main',
-    },
-  } : require('firebase-functions').config();
+  const token = process.env.GITHUB_TOKEN || GITHUB_TOKEN;
+  const owner = process.env.GITHUB_OWNER || GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO || GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || GITHUB_BRANCH || 'main';
 
   if (!token || !owner || !repo) {
-    throw new Error('Missing GitHub config. Set via firebase functions:config:set github.token="..." github.owner="..." github.repo="..." github.branch="main"');
+    throw new Error('Missing GitHub config. Set GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO environment variables.');
   }
-  return { token, owner, repo, branch: branch || 'main' };
+  return { token, owner, repo, branch };
 }
 
 function asItem(entry) {
