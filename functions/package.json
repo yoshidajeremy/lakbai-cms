@@ -5,7 +5,11 @@
     "node": "20"
   },
   "main": "index.js",
+  "scripts": {
+    "start": "functions-framework --target=api --signature-type=http"
+  },
   "dependencies": {
+    "@google-cloud/functions-framework": "^3.3.0",
     "@google-cloud/secret-manager": "^6.1.1",
     "@octokit/rest": "^20.1.1",
     "cors": "^2.8.5",
