@@ -33,7 +33,9 @@ app.get('/', (req, res) => res.json({ ok: true }));
 
 exports.api = httpsV2.onRequest({ cpu: 2, memory: '512MiB', timeoutSeconds: 60 }, app);
 
-// preload secret (non‑blocking)
-loadSecret('GITHUB_TOKEN').then(tok => {
-  if (tok && !process.env.GITHUB_TOKEN) process.env.GITHUB_TOKEN = tok;
-}).catch(() => {});
+// preload secret only in Cloud Run/Functions (avoids ADC error during local deploy)
+if (process.env.K_SERVICE) {
+  loadSecret('GITHUB_TOKEN').then(tok => {
+    if (tok && !process.env.GITHUB_TOKEN) process.env.GITHUB_TOKEN = tok;
+  }).catch(() => {});
+}

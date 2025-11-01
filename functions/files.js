@@ -9,19 +9,18 @@ const BRANCH = process.env.GITHUB_BRANCH || 'soriano';
 
 // GitHub fetch helper (Node 20 has global fetch)
 async function gh(path, init = {}) {
-  const token = process.env.GITHUB_TOKEN || await loadSecret('GITHUB_TOKEN');
+  let token = process.env.GITHUB_TOKEN;
   if (!token) {
-    const err = new Error('GITHUB_TOKEN not configured');
-    err.status = 500;
-    throw err;
+    try { token = await loadSecret('GITHUB_TOKEN'); } catch { token = ''; }
   }
   const headers = {
     'Accept': 'application/vnd.github+json',
     'User-Agent': 'lakbai-cms',
-    'Authorization': `token ${token}`,
     ...(init.headers || {}),
   };
-  return fetch(`https://api.github.com${path}`, { ...init, headers });
+  if (token) headers['Authorization'] = `token ${token}`; // optional: allow public access without token
+  const res = await fetch(`https://api.github.com${path}`, { ...init, headers });
+  return res;
 }
 
 // GET /list?path=
