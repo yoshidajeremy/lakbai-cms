@@ -110,47 +110,52 @@ const onCreateFile = () => {
 };
 
 const onDownload = async (item) => {
+  try {
     const { contentBase64, mediaType } = await filesApi.get(item.path);
-    const blob = new Blob(
-        [Uint8Array.from(atob(contentBase64), c => c.charCodeAt(0))],
-        { type: mediaType || 'application/octet-stream' }
-    );
+    const blob = new Blob([Uint8Array.from(atob(contentBase64), c => c.charCodeAt(0))],
+                          { type: mediaType || 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = item.name;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    }, 100);
+    a.href = url; a.download = item.name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+  } catch (e) {
+    setError(e?.message || String(e));
+  }
 };
 
 const onMkdir = () => setModal({ open: true, type: 'folder', value: '' });
 const handleCreateFolder = async () => {
+  try {
     const name = modal.value.trim();
     if (!name) return;
     setModal({ open: false, type: '', value: '' });
     const path = `${cwd}/${name}`.replace(/\/+/g, '/');
     await filesApi.mkdir({ path, message: `Create folder ${path}` });
     await refresh();
+  } catch (e) {
+    setError(e?.message || String(e));
+  }
 };
 
 const onRename = (item) => {
     setRenameModal({ open: true, item, value: item.name });
 };
 const handleRename = async () => {
+  try {
     const name = renameModal.value.trim();
     if (!name || name === renameModal.item.name) {
-        setRenameModal({ open: false, item: null, value: '' });
-        return;
-}
+      setRenameModal({ open: false, item: null, value: '' });
+      return;
+    }
     const fromPath = renameModal.item.path;
     const toPath = `${cwd}/${name}`.replace(/\/+/g, '/');
     setRenameModal({ open: false, item: null, value: '' });
     await filesApi.rename({ fromPath, toPath, message: `Rename ${fromPath} -> ${toPath}` });
     await refresh();
+  } catch (e) {
+    setError(e?.message || String(e));
+  }
 };
 const handleCreateFile = async () => {
 try {
@@ -177,38 +182,34 @@ try {
 };
 
 const onDelete = async (item) => {
-    // eslint-safe custom confirm
+  try {
     const ok = await askConfirm(`Delete ${item.path}?`);
     if (!ok) return;
     await filesApi.delete({ path: item.path, message: `Delete ${item.path}` });
     await refresh();
+  } catch (e) {
+    setError(e?.message || String(e));
+  }
 };
 
-
 const openPreview = async (item) => {
+  try {
     if (item.type !== 'file') return;
     const { contentBase64, mediaType, sha } = await filesApi.get(item.path);
     const raw = (() => {
-        try {
-            return decodeURIComponent(escape(atob(contentBase64)));
-        } catch {
-            return '';
-        }
+      try { return decodeURIComponent(escape(atob(contentBase64))); } catch { return ''; }
     })();
     if (item.name.toLowerCase().endsWith('.csv')) {
-    const rows = normalizeCsvRows(parseCsv(raw));
-    setCsvEdit({
-        path: item.path,
-        rows,
-        raw,
-        sha,
-        mediaType,
-        });
-        setPreview(null);
+      const rows = normalizeCsvRows(parseCsv(raw));
+      setCsvEdit({ path: item.path, rows, raw, sha, mediaType });
+      setPreview(null);
     } else {
-        setPreview({ path: item.path, contentBase64, mediaType });
-        setCsvEdit(null);
+      setPreview({ path: item.path, contentBase64, mediaType });
+      setCsvEdit(null);
     }
+  } catch (e) {
+    setError(e?.message || String(e));
+  }
 };
 
   // Update a single cell (kept as-is)

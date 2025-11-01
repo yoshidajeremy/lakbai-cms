@@ -11,7 +11,7 @@ const BASE = origin ? `${origin}/api` : `/api`;
 
 async function req(path, { method = 'GET', body } = {}) {
   const headers = { 'Accept': 'application/json' };
-  const init = { method, headers, credentials: 'omit' }; // no cookies -> avoid CORS "include" issues
+  const init = { method, headers, credentials: 'omit', mode: 'cors' }; // explicit CORS remove if error
   if (body) {
     headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
