@@ -11,7 +11,7 @@ const BRANCH = process.env.GITHUB_BRANCH || 'soriano';
 async function gh(path, init = {}) {
   const token = process.env.GITHUB_TOKEN || await loadSecret('GITHUB_TOKEN');
   if (!token) {
-    const err = new Error('GITHUB_TOKEN is not configured');
+    const err = new Error('GITHUB_TOKEN not configured');
     err.status = 500;
     throw err;
   }
@@ -21,39 +21,31 @@ async function gh(path, init = {}) {
     'Authorization': `token ${token}`,
     ...(init.headers || {}),
   };
-  const res = await fetch(`https://api.github.com${path}`, { ...init, headers });
-  return res;
+  return fetch(`https://api.github.com${path}`, { ...init, headers });
 }
 
-// GET /files/list?path=<path>
+// GET /list?path=
 router.get('/list', async (req, res) => {
   try {
     const qPath = String(req.query.path || '').replace(/^\/+/, '');
-    // encode each segment to keep slashes
-    const encPath = qPath.split('/').map(encodeURIComponent).join('/');
-    const url = `/repos/${OWNER}/${REPO}/contents/${encPath}?ref=${encodeURIComponent(BRANCH)}`;
+    const enc = qPath.split('/').map(encodeURIComponent).join('/');
+    const url = `/repos/${OWNER}/${REPO}/contents/${enc}?ref=${encodeURIComponent(BRANCH)}`;
 
-    const ghRes = await gh(url);
-    if (ghRes.status === 404) return res.json([]);
+    const r = await gh(url);
+    if (r.status === 404) return res.json([]);
+    if (!r.ok) return res.status(r.status).json({ error: await r.text() || r.statusText });
 
-    if (!ghRes.ok) {
-      const txt = await ghRes.text();
-      return res.status(ghRes.status).json({ error: txt || ghRes.statusText });
-    }
-
-    const data = await ghRes.json();
+    const data = await r.json();
     const items = Array.isArray(data) ? data : [];
-    const list = items.map(it => ({
+    res.json(items.map(it => ({
       name: it.name,
-      type: it.type,           // 'dir' | 'file'
+      type: it.type,
       size: it.size || 0,
       path: it.path,
       sha: it.sha,
       download_url: it.download_url || null,
-    }));
-    res.json(list);
+    })));
   } catch (e) {
-    console.warn('list failed:', e.message || e);
     res.status(e.status || 500).json({ error: e.message || 'Internal error' });
   }
 });
