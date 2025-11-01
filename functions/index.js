@@ -3,6 +3,7 @@ const path = require('path');
 const express = require('express');
 const filesRouter = require('./files');
 const httpsV2 = require('firebase-functions/v2/https');
+const { loadSecret } = require('./secrets');
 
 // load local .env for dev only
 if (process.env.NODE_ENV !== 'production') {
@@ -21,5 +22,10 @@ app.use('/files', filesRouter);
 
 // Export as https function: /api/files/*
 exports.api = httpsV2.onRequest({ cpu: 2, memory: '512MiB', timeoutSeconds: 60 }, app);
+
+// preload secret at cold start (non-blocking)
+loadSecret('GITHUB_TOKEN').then(tok => {
+  if (tok && !process.env.GITHUB_TOKEN) process.env.GITHUB_TOKEN = tok;
+}).catch(() => {});
 
 // use GITHUB_TOKEN, GITHUB_OWNER, etc. in your GitHub API calls
