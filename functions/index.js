@@ -1,9 +1,25 @@
-const functions = require('firebase-functions');
+const path = require('path');
+
 const express = require('express');
 const filesRouter = require('./files');
+const httpsV2 = require('firebase-functions/v2/https');
+
+// load local .env for dev only
+if (process.env.NODE_ENV !== 'production') {
+  // install dotenv in functions: npm install --save dotenv
+  require('dotenv').config({ path: path.join(__dirname, '.env') });
+}
+
+// prefer environment variables, fallback to functions.config() if present
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const GITHUB_OWNER = process.env.GITHUB_OWNER || 'IATIA224';
+const GITHUB_REPO  = process.env.GITHUB_REPO  || 'lakbai';
+const GITHUB_BRANCH= process.env.GITHUB_BRANCH|| 'soriano';
 
 const app = express();
 app.use('/files', filesRouter);
 
 // Export as https function: /api/files/*
-exports.api = functions.region('us-central1').https.onRequest(app);
+exports.api = httpsV2.onRequest({ cpu: 2, memory: '512MiB', timeoutSeconds: 60 }, app);
+
+// use GITHUB_TOKEN, GITHUB_OWNER, etc. in your GitHub API calls
