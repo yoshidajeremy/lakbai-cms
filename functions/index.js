@@ -17,12 +17,14 @@ const corsOptions = {
   },
   credentials: false,
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
+  allowedHeaders: ['Content-Type','Authorization','Accept'], // <- add Accept
 };
 
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors(corsOptions));
+// Parse JSON (supports base64 payloads for uploads)
+app.use(express.json({ limit: '25mb' }));
 app.options('*', cors(corsOptions));
 
 // mount for both local and prod
