@@ -1,6 +1,23 @@
 const express = require('express');
 const cors = require('cors');
 const { Octokit } = require('@octokit/rest');
+const path = require('path');
+
+// load local .env in development (install dotenv in functions: npm i --save dotenv)
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config({ path: path.join(__dirname, '.env') });
+}
+
+const functions = (() => {
+  try { return require('firebase-functions'); } catch (e) { return {}; }
+})();
+
+// fallback config (functions.config may not exist on Render)
+const cfg = (functions && functions.config) ? functions.config() : {};
+const GITHUB_TOKEN  = process.env.GITHUB_TOKEN  || (cfg.github && cfg.github.token)  || '';
+const GITHUB_OWNER  = process.env.GITHUB_OWNER  || (cfg.github && cfg.github.owner)  || 'IATIA224';
+const GITHUB_REPO   = process.env.GITHUB_REPO   || (cfg.github && cfg.github.repo)   || 'lakbai';
+const GITHUB_BRANCH = process.env.GITHUB_BRANCH || (cfg.github && cfg.github.branch) || 'soriano';
 
 const router = express.Router();
 router.use(cors({
