@@ -19,10 +19,10 @@ const CATEGORY_STYLES = {
   'USER MANAGEMENT': { bg: '#d1fae5', fg: '#065f46' }, // green background
   'CONTENT DELETION': { bg: '#fee2e2', fg: '#b91c1c' }, // <-- Red background for CONTENT DELETION
   'CONTENT CREATION': { bg: '#ede9fe', fg: '#5b21b6' },
-  MODERATION: { bg: '#fef3c7', fg: '#b45309' },
+  'MODERATION': { bg: '#fef3c7', fg: '#b45309' },
   'DATA ACCESS': { bg: '#cffafe', fg: '#155e75' },
   'SYSTEM ADMINISTRATION': { bg: '#f1f5f9', fg: '#334155' },
-  SECURITY: { bg: '#ffe4e6', fg: '#be123c' },
+  'SECURITY': { bg: '#ffe4e6', fg: '#be123c' },
   'ACCESS CONTROL': { bg: '#fef9c3', fg: '#92400e' },
   'SYSTEM MAINTENANCE': { bg: '#ede9fe', fg: '#4c1d95' },
   'DESTINATION IMAGE': { bg: '#fee0efff', fg: '#ff3c9dff' }, // <-- Blue background for IMAGE UPLOAD
@@ -293,7 +293,7 @@ useEffect(() => {
     () => ['All', ...Array.from(new Set(logs.map((l) => l.category))).sort()],
     [logs]
   );
-  const rolesList = ['All', 'admin', 'moderator', 'user', 'system', 'anonymous'];
+  const rolesList = ['All', 'admin', 'user'];
   const outcomesList = ['All', 'SUCCESS', 'FAILURE'];
 
   const windowWidth = useWindowWidth();
@@ -482,7 +482,8 @@ useEffect(() => {
             }}
           >
             {categoriesList.map((c) => (
-              <option key={c}>{c}</option>
+              // Keep the value as-is for filtering, show label in uppercase
+              <option key={c} value={c}>{String(c).toUpperCase()}</option>
             ))}
           </select>
           <select
@@ -504,7 +505,7 @@ useEffect(() => {
             }}
           >
             {outcomesList.map((o) => (
-              <option key={o}>{o}</option>
+              <option key={o} value={o}>{String(o).toUpperCase()}</option>
             ))}
           </select>
           <select
@@ -526,7 +527,7 @@ useEffect(() => {
             }}
           >
             {rolesList.map((r) => (
-              <option key={r}>{r}</option>
+              <option key={r} value={r}>{String(r).toUpperCase()}</option>
             ))}
           </select>
           <div style={{
