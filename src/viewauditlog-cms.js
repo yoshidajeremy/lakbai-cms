@@ -231,10 +231,6 @@ return (
         </div>
 
         {/* Row 3: Event Details */}
-        <div style={cardStyle}>
-            <div style={sectionTitleStyle}>Event Details</div>
-            <div style={{ color: '#374151' }}>{details}</div>
-        </div>
 
         {/* Row 4: User Agent */}
         <div style={cardStyle}>

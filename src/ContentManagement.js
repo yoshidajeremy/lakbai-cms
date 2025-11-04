@@ -476,35 +476,42 @@ const handleTakeAction = async ({ actionType, reason, notes }) => {
 
   useEffect(() => {
     (async () => {
-      try {
-        const countReports = async () => {
-          let total = 0;
-          // report (singular)
-          try {
-            const c1 = await getCountFromServer(collection(db, 'report'));
-            total += c1.data().count || 0;
-          } catch {
-            try { const s1 = await getDocs(collection(db, 'report')); total += s1.size || 0; } catch {}
-          }
-          // reports (plural)
-          try {
-            const c2 = await getCountFromServer(collection(db, 'reports'));
-            total += c2.data().count || 0;
-          } catch {
-            try { const s2 = await getDocs(collection(db, 'reports')); total += s2.size || 0; } catch {}
-          }
-          return total;
-        };
+      const countReports = async () => {
+        let total = 0;
+        try { const c1 = await getCountFromServer(collection(db, 'report')); total += c1.data().count || 0; } catch {
+          try { const s1 = await getDocs(collection(db, 'report')); total += s1.size || 0; } catch {}
+        }
+        try { const c2 = await getCountFromServer(collection(db, 'reports')); total += c2.data().count || 0; } catch {
+          try { const s2 = await getDocs(collection(db, 'reports')); total += s2.size || 0; } catch {}
+        }
+        return total;
+      };
 
-        const [dSnap, uSnap, aSnap, reportsCount] = await Promise.all([
+      try {
+        const [dRes, uRes, aRes, rRes] = await Promise.allSettled([
           getDocs(collection(db, 'destinations')),
           getDocs(collection(db, 'users')),
-          getDocs(collection(db, 'articles')), // kept for compatibility
+          getDocs(collection(db, 'articles')), // optional; may not exist
           countReports(),
         ]);
-        const destinations = dSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        const users = uSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        const articles = aSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+        const destinations =
+          dRes.status === 'fulfilled'
+            ? dRes.value.docs.map((d) => ({ id: d.id, ...d.data() }))
+            : JSON.parse(localStorage.getItem('destinations') || '[]');
+
+        const users =
+          uRes.status === 'fulfilled'
+            ? uRes.value.docs.map((d) => ({ id: d.id, ...d.data() }))
+            : JSON.parse(localStorage.getItem('users') || '[]');
+
+        const articles =
+          aRes.status === 'fulfilled'
+            ? aRes.value.docs.map((d) => ({ id: d.id, ...d.data() }))
+            : [];
+
+        const reportsCount = rRes.status === 'fulfilled' ? rRes.value : 0;
+
         const publishedDestinations =
           destinations.filter((x) => String(x.status || '').toLowerCase() === 'published').length;
 
@@ -517,33 +524,13 @@ const handleTakeAction = async ({ actionType, reason, notes }) => {
 
         setAnalytics((a) => ({
           ...a,
-          totalArticles: reportsCount,          // show number of submitted reports
+          totalArticles: reportsCount,
           publishedContent: publishedDestinations,
           recentActivity: recent,
         }));
 
         setDestinations(destinations);
         setUsers(users);
-      } catch (e) {
-        // fallback to local caches + best-effort report count
-        let reportsCount = 0;
-        try { const s1 = await getDocs(collection(db, 'report')); reportsCount += s1.size || 0; } catch {}
-        try { const s2 = await getDocs(collection(db, 'reports')); reportsCount += s2.size || 0; } catch {}
-
-        const localDest = JSON.parse(localStorage.getItem('destinations') || '[]');
-        const localUsers = JSON.parse(localStorage.getItem('users') || '[]');
-        const localArticles = JSON.parse(localStorage.getItem('articles') || '[]');
-
-        setAnalytics((a) => ({
-          ...a,
-          totalArticles: reportsCount // reports from Firestore (or 0)
-          ,
-          publishedContent: localDest.filter((d) => String(d.status || '').toLowerCase() === 'published').length,
-          recentActivity: [...localDest.slice(-5), ...localArticles.slice(-5)].slice(0, 10),
-        }));
-
-        setDestinations(localDest);
-        setUsers(localUsers);
       } finally {
         setLoading(false);
       }
@@ -1363,39 +1350,6 @@ useEffect(() => {
   }).finally(() => setLoading(false));
 }, [active, logPage]);
 
-// Pagination for Users
-const USER_PAGE_SIZE = 20;
-const [userPage, setUserPage] = useState(1);
-const [lastUserDoc, setLastUserDoc] = useState(null);
-const [hasMoreUsers, setHasMoreUsers] = useState(true);
-
-useEffect(() => {
-  if (active !== 'users') return;
-  setLoadingUsers(true);
-
-  if (userPage === 1) {
-    const cached = JSON.parse(localStorage.getItem('users_page1') || '[]');
-    if (cached.length) setUsers(cached);
-  }
-
-  let q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(USER_PAGE_SIZE));
-  if (lastUserDoc) {
-    q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), startAfter(lastUserDoc), limit(USER_PAGE_SIZE));
-  }
-
-  getDocs(q).then((snap) => {
-    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    if (userPage === 1) {
-      setUsers(items);
-      localStorage.setItem('users_page1', JSON.stringify(items));
-    } else {
-      setUsers((prev) => [...prev, ...items]);
-    }
-    setHasMoreUsers(items.length === USER_PAGE_SIZE);
-    setLastUserDoc(snap.docs[snap.docs.length - 1]);
-  }).finally(() => setLoadingUsers(false));
-}, [active, userPage]);
-
   return (
     <div className="cms-root">
       <aside className="sidebar">
@@ -1841,88 +1795,88 @@ useEffect(() => {
             </div>
 
             {/* Table */}
- <div className="content-card reports-table-responsive" style={{ padding: 0, borderRadius: 12, overflow: 'hidden' }}>
-  {/* Header */}
-  <div className="reports-table-header">
-    {['Report Details', 'Reported User', 'Content Type', 'Reason', 'Priority', 'Status', 'Reported Date', 'Actions'].map((h) => (
-      <div key={h} className="reports-table-cell" style={{ fontWeight: 700, color: '#6b7280', background: '#f6f8fa', fontSize: 14, borderBottom: '1px solid #eef2f7' }}>
-        {h}
-      </div>
-    ))}
-  </div>
-  {loadingReports ? (
-    <div className="centered" style={{ padding: 40 }}><div className="loading-spinner" /></div>
-  ) : filteredReports.length === 0 ? (
-    <div className="muted" style={{ padding: 24 }}>No reports found</div>
-  ) : (
-    filteredReports.map((r, i) => (
-      <div
-        key={r.id || i}
-        className="reports-table-row"
-        style={{
-          background: i % 2 ? '#fff' : '#fafbfc',
-          borderBottom: '1px solid #eef2f7'
-        }}
-      >
-        {/* Report Details */}
-        <div className="reports-table-cell" data-label="Report Details">
-                   <div style={{ fontWeight: 700 }}>{r.title}</div>
-          <div className="muted small">By: {r.reporterName || (r.reporterId ? userNameCache[r.reporterId] : '') || '—'}</div>
-        </div>
-        {/* Reported User */}
-        <div className="reports-table-cell" data-label="Reported User">
-          {(() => {
-            const ruId = typeof r.reportedUser === 'string'
-              ? r.reportedUser
-              : r?.reportedUser?.id || '';
-            const ruName = (typeof r.reportedUserName === 'object' && r.reportedUserName?.name)
-              ? r.reportedUserName.name
-              : (ruId ? userNameCache[ruId] : null) || '—';
-            const initial = (ruName || 'U').trim().charAt(0).toUpperCase();
-            return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#6366f1', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 600 }}>
-                  {initial}
-                </div>
-                <div>
-                  <div style={{ fontWeight: 600 }}>{ruName}</div>
-                  <div className="muted small">ID: {ruId || '—'}</div>
-                </div>
+            <div className="content-card reports-table-responsive" style={{ padding: 0, borderRadius: 12, overflow: 'hidden' }}>
+              {/* Header */}
+              <div className="reports-table-header">
+                {['Report Details', 'Reported User', 'Content Type', 'Reason', 'Priority', 'Status', 'Reported Date', 'Actions'].map((h) => (
+                  <div key={h} className="reports-table-cell" style={{ fontWeight: 700, color: '#6b7280', background: '#f6f8fa', fontSize: 14, borderBottom: '1px solid #eef2f7' }}>
+                    {h}
+                  </div>
+                ))}
               </div>
-            );
-          })()}
-        </div>
-        {/* Content Type */}
-        <div className="reports-table-cell" data-label="Content Type">{r.contentType}</div>
-        {/* Reason */}
-        <div className="reports-table-cell" data-label="Reason">{r.reason}</div>
-        {/* Priority */}
-        <div className="reports-table-cell" data-label="Priority"><PriorityBadge v={r.priority} /></div>
-        {/* Status */}
-        <div className="reports-table-cell" data-label="Status"><StatusBadge v={r.status} /></div>
-        {/* Date */}
-        <div className="reports-table-cell" data-label="Reported Date">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ''}</div>
-        {/* Actions */}
-        <div className="reports-table-cell" data-label="Actions" style={{ display: 'flex', gap: 8 }}>
-          <button
-            className="btn-view"
-            style={{ background: '#e0e7ff', color: '#2563eb', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
-            onClick={() => { setViewReport(r); setViewReportId(r.id); }}
-          >
-            View
-          </button>
-          <button
-            className="btn-secondary"
-            style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
-            onClick={() => openActionModal(r)}
-          >
-            Action
-          </button>
-        </div>
-      </div>
-    ))
-  )}
-</div>
+              {loadingReports ? (
+                <div className="centered" style={{ padding: 40 }}><div className="loading-spinner" /></div>
+              ) : filteredReports.length === 0 ? (
+                <div className="muted" style={{ padding: 24 }}>No reports found</div>
+              ) : (
+                filteredReports.map((r, i) => (
+                  <div
+                    key={r.id || i}
+                    className="reports-table-row"
+                    style={{
+                      background: i % 2 ? '#fff' : '#fafbfc',
+                      borderBottom: '1px solid #eef2f7'
+                    }}
+                  >
+                    {/* Report Details */}
+                    <div className="reports-table-cell" data-label="Report Details">
+                              <div style={{ fontWeight: 700 }}>{r.title}</div>
+                      <div className="muted small">By: {r.reporterName || (r.reporterId ? userNameCache[r.reporterId] : '') || '—'}</div>
+                    </div>
+                    {/* Reported User */}
+                    <div className="reports-table-cell" data-label="Reported User">
+                      {(() => {
+                        const ruId = typeof r.reportedUser === 'string'
+                          ? r.reportedUser
+                          : r?.reportedUser?.id || '';
+                        const ruName = (typeof r.reportedUserName === 'object' && r.reportedUserName?.name)
+                          ? r.reportedUserName.name
+                          : (ruId ? userNameCache[ruId] : null) || '—';
+                        const initial = (ruName || 'U').trim().charAt(0).toUpperCase();
+                        return (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#6366f1', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 600 }}>
+                              {initial}
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600 }}>{ruName}</div>
+                              <div className="muted small">ID: {ruId || '—'}</div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    {/* Content Type */}
+                    <div className="reports-table-cell" data-label="Content Type">{r.contentType}</div>
+                    {/* Reason */}
+                    <div className="reports-table-cell" data-label="Reason">{r.reason}</div>
+                    {/* Priority */}
+                    <div className="reports-table-cell" data-label="Priority"><PriorityBadge v={r.priority} /></div>
+                    {/* Status */}
+                    <div className="reports-table-cell" data-label="Status"><StatusBadge v={r.status} /></div>
+                    {/* Date */}
+                    <div className="reports-table-cell" data-label="Reported Date">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ''}</div>
+                    {/* Actions */}
+                    <div className="reports-table-cell" data-label="Actions" style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        className="btn-view"
+                        style={{ background: '#e0e7ff', color: '#2563eb', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
+                        onClick={() => { setViewReport(r); setViewReportId(r.id); }}
+                      >
+                        View
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
+                        onClick={() => openActionModal(r)}
+                      >
+                        Action
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
 
             {/* View modal */}
             {viewReport && (
@@ -1945,23 +1899,20 @@ useEffect(() => {
 
         {active === 'users' && (
           <div className="content-section">
-            <div className="section-header" style={{ alignItems: 'center' }}>
+            <div className="section-header " 
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}
+            >
               <div>
                 <h2 className="title" style={{ margin: 0 }}>User Management</h2>
                 <p className="muted" style={{ marginTop: 4 }}>Manage traveler accounts and profiles</p>
               </div>
               <button
                 className="btn-primary-cms"
-                style={{ padding: '10px 16px', borderRadius: 12, background: 'linear-gradient(90deg,#2563eb,#3b82f6)' }}
+                style={{ padding: '10px 16px', borderRadius: 12 }}
                 onClick={() => setAddUserOpen(true)}   // CHANGED: open modal
               >
                 + Add New User
               </button>
-              {hasMoreUsers && (
-                <button className="btn-secondary" onClick={() => setUserPage(userPage + 1)}>
-                  Load More
-                </button>
-              )}
             </div>
 
             {/* Search + Status filter row */}
@@ -1991,134 +1942,144 @@ useEffect(() => {
 
             <div className="content-card" style={{ padding: 0, borderRadius: 12, overflow: 'hidden' }}>
               {/* Define a consistent 6-column grid (User, Email, Provider, Status, Join Date, Actions) */}
-              {(() => {
-                const userGridCols = '2.6fr 2fr 1.2fr 1.2fr 1.4fr 1.6fr';
+            {(() => {
+              // FIX: correct the grid template (typo 1.fr -> 1fr) and match column proportions
+              const userGridCols =
+                'minmax(230px, 2fr) minmax(320px, 2fr) 180px 180px 180px 320px';
 
-                // Table header
-                const header = (
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: userGridCols,
-                      gap: 0,
-                      background: '#f6f8fa',
-                      color: '#6b7280',
-                      fontWeight: 700,
-                      fontSize: 14,
-                      justifyItems: 'start',
-                      textAlign: 'left'
-                    }}
-                  >
-                    {['User', 'Email', 'Provider', 'Status', 'Join Date', 'Actions'].map((h) => (
-                      <div key={h} style={{ padding: '14px 16px', borderBottom: '1px solid #eef2f7' }}>
-                        {h}
-                      </div>
-                    ))}
-                  </div>
-                );
+              const headers = [
+                { label: 'User', align: 'left' },
+                { label: 'Email', align: 'left' },
+                { label: 'Provider', align: 'left' },
+                { label: 'Status', align: 'center' },
+                { label: 'Join Date', align: 'center' },
+                { label: 'Actions', align: 'left' },
+              ];
 
-                if (loadingUsers) {
-                  return (
-                    <>
-                      {header}
-                      <div className="centered" style={{ padding: 40 }}>
-                        <div className="loading-spinner" />
-                      </div>
-                    </>
-                  );
-                }
-
-                const q = searchUser.trim().toLowerCase();
-                const filtered = (users || []).filter((u) => {
-                  if (!u) return false; // guard against null entries
-                  const okQ =
-                    !q || ((u.travelerName || u.name || '') + ' ' + (u.email || '')).toLowerCase().includes(q);
-                  const s = (u.status || 'active').toLowerCase();
-                  const okS = userStatusFilter === 'all' || userStatusFilter === '' || s === userStatusFilter;
-                  return okQ && okS;
-                });
-
-                if (!filtered.length) {
-                  return (
-                    <>
-                      {header}
-                      <div className="muted" style={{ padding: 24 }}>
-                        No users found
-                      </div>
-                    </>
-                  );
-                }
-
-                const rowStyle = {
-                  display: 'grid',
-                  gridTemplateColumns: userGridCols,
-                  alignItems: 'center',
-                  justifyItems: 'start',
-                  textAlign: 'left'
-                };
-
+              const header = (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: userGridCols,
+                    gap: 0,
+                    background: '#f6f8fa',
+                    color: '#6b7280',
+                    fontWeight: 600,
+                    fontSize: 14,
+                    alignItems: 'center',
+                    borderTopLeftRadius: 12,
+                    borderTopRightRadius: 12
+                  }}
+                >
+                  {headers.map((h) => (
+                    <div
+                      key={h.label}
+                      style={{
+                        padding: '14px 16px',
+                        borderBottom: '1px solid #eef2f7',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: h.align === 'center' ? 'center' : 'flex-start',
+                        width: '100%',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {h.label}
+                    </div>
+                  ))}
+                </div>
+              );
+              if (loadingUsers) {
                 return (
                   <>
                     {header}
-                    {filtered.map((u, i) => {
-                      const name = u.travelerName || u.name || 'Unnamed';
-                      const initial = name.charAt(0).toUpperCase();
-                      const provider = u.provider || u.providerId || 'Email';
-                      const status = (u.status || 'ACTIVE').toUpperCase();
-                      const createdAt = u.createdAt?.toDate
-                        ? u.createdAt.toDate()
-                        : u.createdAt
-                        ? new Date(u.createdAt)
-                        : null;
-                      const joinDate = createdAt ? createdAt.toLocaleDateString() : '';
-                      const pUrl =
-                        u.profilePictureUrl ||
-                        u.photoURL ||
-                        u.photoUrl ||
-                        u.avatarUrl ||
-                        u.avatar ||
-                        u.photo;
-                      const pid = getCloudinaryPublicId(pUrl);
+                    <div className="centered" style={{ padding: 40 }}>
+                      <div className="loading-spinner" />
+                    </div>
+                  </>
+                );
+              }
 
-                      return (
+              const q = searchUser.trim().toLowerCase();
+              const filtered = (users || []).filter((u) => {
+                if (!u) return false;
+                const okQ =
+                  !q || ((u.travelerName || u.name || '') + ' ' + (u.email || '')).toLowerCase().includes(q);
+                const s = (u.status || 'active').toLowerCase();
+                const okS = userStatusFilter === 'all' || userStatusFilter === '' || s === userStatusFilter;
+                return okQ && okS;
+              });
+
+              if (!filtered.length) {
+                return (
+                  <>
+                    {header}
+                    <div className="muted" style={{ padding: 24 }}>
+                      No users found
+                    </div>
+                  </>
+                );
+              }
+
+              const rowStyle = {
+                display: 'grid',
+                gridTemplateColumns: userGridCols,
+                alignItems: 'center',
+                justifyItems: 'stretch',
+                textAlign: 'left'
+              };
+
+              return (
+                <>
+                  {header}
+                  {filtered.map((u, i) => {
+                    const name = u.travelerName || u.name || 'Unnamed';
+                    const initial = name.charAt(0).toUpperCase();
+                    const provider = u.provider || u.providerId || 'Email';
+                    const status = (u.status || 'ACTIVE').toUpperCase();
+                    const createdAt = u.createdAt?.toDate
+                      ? u.createdAt.toDate()
+                      : u.createdAt
+                      ? new Date(u.createdAt)
+                      : null;
+                    const joinDate = createdAt ? createdAt.toLocaleDateString() : '';
+                    const pUrl =
+                      u.profilePictureUrl ||
+                      u.photoURL ||
+                      u.photoUrl ||
+                      u.avatarUrl ||
+                      u.avatar ||
+                      u.photo;
+                    const pid = getCloudinaryPublicId(pUrl);
+
+                    return (
+                      <div
+                        key={u.id || i}
+                        style={{
+                          ...rowStyle,
+                          background: i % 2 ? '#fff' : '#fafbfc',
+                          borderBottom: '1px solid #eef2f7'
+                        }}
+                      >
+                        {/* User */}
                         <div
-                          key={u.id || i}
                           style={{
-                            ...rowStyle,
-                            background: i % 2 ? '#fff' : '#fafbfc',
-                            borderBottom: '1px solid #eef2f7'
+                            padding: '14px 16px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 12,
+                            minWidth: 0
                           }}
                         >
-                          {/* User */}
-                          <div
-                            style={{
-                              padding: '14px 16px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 12
-                            }}
-                          >
-                            {pid ? (
-                              <CloudinaryContext cloudName={CLOUDINARY_CLOUD_NAME}>
-                                <Image
-                                  publicId={pid}
-                                  width="36"
-                                  height="36"
-                                  crop="fill"
-                                  gravity="face"
-                                  radius="max"
-                                  alt=""
-                                  style={{
-                                    width: 36,
-                                    height: 36,
-                                    borderRadius: '50%',
-                                    objectFit: 'cover'
-                                  }}
-                                />
-                              </CloudinaryContext>
-                            ) : pUrl ? (
-                              <img
-                                src={pUrl}
+                          {pid ? (
+                            <CloudinaryContext cloudName={CLOUDINARY_CLOUD_NAME}>
+                              <Image
+                                publicId={pid}
+                                width="36"
+                                height="36"
+                                crop="fill"
+                                gravity="face"
+                                radius="max"
                                 alt=""
                                 style={{
                                   width: 36,
@@ -2127,116 +2088,131 @@ useEffect(() => {
                                   objectFit: 'cover'
                                 }}
                               />
-                            ) : (
-                              <div style={{
-                                width: 36, height: 36, borderRadius: '50%',
-                                background: '#6366f1', color: '#fff',
-                                display: 'grid', placeItems: 'center',
-                                fontWeight: 700, fontSize: 16
-                              }}>
-                                {initial} {/* use current row's initial, not userProfile */}
-                              </div>
-                            )}
-                            <div>
-                              <div style={{ fontWeight: 700 }}>{name}</div>
-                              <div className="muted small">ID: {u.id}</div>
+                            </CloudinaryContext>
+                          ) : pUrl ? (
+                            <img
+                              src={pUrl}
+                              alt=""
+                              style={{
+                                width: 36,
+                                height: 36,
+                                borderRadius: '50%',
+                                objectFit: 'cover'
+                              }}
+                            />
+                          ) : (
+                            <div style={{
+                              width: 36, height: 36, borderRadius: '50%',
+                              background: '#6366f1', color: '#fff',
+                              display: 'grid', placeItems: 'center',
+                              fontWeight: 700, fontSize: 16
+                            }}>
+                              {initial}
                             </div>
-                          </div>
-
-                          {/* Email */}
-                          <div style={{ padding: '14px 16px' }}>{u.email || '—'}</div>
-
-                          {/* Provider */}
-                          <div style={{ padding: '14px 16px' }}>{provider}</div>
-
-                          {/* Status */}
-                          <div style={{ padding: '14px 16px' }}>
-                            <span
-                              style={{
-                                background: '#dcfce7',
-                                color: '#166534',
-                                borderRadius: 999,
-                                padding: '4px 10px',
-                                fontWeight: 700,
-                                fontSize: 12
-                              }}
-                            >
-                              {status}
-                            </span>
-                          </div>
-
-                          {/* Join Date */}
-                          <div style={{ padding: '14px 16px' }}>{joinDate}</div>
-
-                          {/* Actions */}
-                          <div
-                            style={{
-                              padding: '14px 16px',
-                              display: 'flex',
-                              gap: 8,
-                              justifyContent: 'flex-start'
-                            }}
-                          >
-                            <button
-                              className="btn-view"
-                              style={{
-                                background: '#e0e7ff',
-                                color: '#2563eb',
-                                border: 'none',
-                                padding: '6px 18px',
-                                borderRadius: 8,
-                                fontWeight: 700,
-                                fontSize: 14
-                              }}
-                              onClick={() => openUserProfile(u)}
-                            >
-                              View
-                            </button>
-
-                            <button
-                              className="btn-primary-cms"
-                              style={{
-                                background: '#dcfce7',
-                                color: '#166534',
-                                border: 'none',
-                                padding: '6px 18px',
-                                borderRadius: 8,
-                                fontWeight: 700,
-                                marginRight: 8,
-                                fontSize: 14,
-                                boxShadow: 'none'
-                              }}
-                              onClick={() => openEditUserModal(u, 'basic')}
-                            >
-                              Edit
-                            </button>
-
-                            <button
-                              className="btn-danger"
-                              style={{
-                                background: '#fee2e2',
-                                color: '#b91c1c',
-                                border: 'none',
-                                padding: '6px 18px',
-                                borderRadius: 8,
-                                fontWeight: 700,
-                                fontSize: 14,
-                                boxShadow: 'none'
-                              }}
-                              onClick={() => {
-                                setDeleteUserTarget(u);
-                                setDeleteUserConfirmOpen(true);
-                              }}
-                            >
-                              Delete
-                            </button>
+                          )}
+                          <div>
+                            <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                            <div className="muted small" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>ID: {u.id}</div>
                           </div>
                         </div>
-                      );
-                    })}
-                  </>
-                );
-              })()}
+
+                        {/* Email (match header padding/alignment) */}
+                        <div style={{ padding: '14px 16px', textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email || '—'}</div>
+
+                        {/* Provider */}
+                        <div style={{ padding: '14px 16px', textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{provider}</div>
+
+                        {/* Status (center like header) */}
+                        <div style={{ padding: '14px 16px', display: 'flex', justifyContent: 'center' }}>
+                          <span
+                            style={{
+                              background: '#dcfce7',
+                              color: '#166534',
+                              borderRadius: 999,
+                              padding: '4px 10px',
+                              fontWeight: 700,
+                              fontSize: 12,
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            {status}
+                          </span>
+                        </div>
+
+                        {/* Join Date (center like header) */}
+                        <div style={{ padding: '14px 16px', display: 'flex', justifyContent: 'center', whiteSpace: 'nowrap' }}>{joinDate}</div>
+
+                        {/* Actions */}
+                        <div
+                          style={{
+                            padding: '14px 16px',
+                            display: 'flex',
+                            gap: 8,
+                            justifyContent: 'flex-start',
+                            flexWrap: 'nowrap',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          <button
+                            className="btn-view"
+                            style={{
+                              background: '#e0e7ff',
+                              color: '#2563eb',
+                              border: 'none',
+                              padding: '6px 18px',
+                              borderRadius: 8,
+                              fontWeight: 700,
+                              fontSize: 14
+                            }}
+                            onClick={() => openUserProfile(u)}
+                          >
+                            View
+                          </button>
+
+                          <button
+                            className="btn-primary-cms"
+                            style={{
+                              background: '#dcfce7',
+                              color: '#166534',
+                              border: 'none',
+                              padding: '6px 18px',
+                              borderRadius: 8,
+                              fontWeight: 700,
+                              marginRight: 8,
+                              fontSize: 14,
+                              boxShadow: 'none'
+                            }}
+                            onClick={() => openEditUserModal(u, 'basic')}
+                          >
+                            Edit
+                          </button>
+
+                          <button
+                            className="btn-danger"
+                            style={{
+                              background: '#fee2e2',
+                              color: '#b91c1c',
+                              border: 'none',
+                              padding: '6px 18px',
+                              borderRadius: 8,
+                              fontWeight: 700,
+                              fontSize: 14,
+                              boxShadow: 'none'
+                            }}
+                            onClick={() => {
+                              setDeleteUserTarget(u);
+                              setDeleteUserConfirmOpen(true);
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              );
+            })()}
             </div>
           </div>
         )} {/* end users tab */}

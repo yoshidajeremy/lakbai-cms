@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { getFirestore, collection, query, where, getCountFromServer, getDocs, doc, getDoc, collectionGroup, orderBy, limit, addDoc } from 'firebase/firestore';
 import { listenUserStats } from './user-stats-cms';
+import './Styles/contentManager.css';
 
 // Cloudinary (unsigned) – same keys used elsewhere in the app
 const CLOUDINARY_UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || 'lakbai_preset';
@@ -1029,278 +1030,261 @@ export default function EditProfileCMS({
               style={{
                 padding: 18,
                 background: '#f8fafc',
-                // scroll inside the body (fixes overlap on basic tab)
                 flex: 1,
                 overflowY: 'auto'
               }}
             >
-                {tab === 'basic' && (
+            {tab === 'basic' && (
               <>
-                {/* Personal Information */}
-                {card('Personal Information', (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Email Address</div>
-                      <input className="form-input" value={form.email}
-                        onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Password</div>
-                      <div style={{ position: 'relative' }}>
-                        <input
-                          className="form-input"
-                          type={showPwd ? 'text' : 'password'}
-                          value={form.password}
-                          onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                          placeholder="Set a new password"
-                          style={{ paddingRight: 38 }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPwd((v) => !v)}
-                          aria-label={showPwd ? 'Hide password' : 'Show password'}
-                          style={{
-                            position: 'absolute',
-                            right: 8,
-                            top: '50%',
-                            transform: 'translateY(-50%)',
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            fontSize: 16,
-                            color: '#6b7280'
-                          }}
-                        >
-                          {showPwd ? '🙈' : '👁️'}
-                        </button>
+                <div style={{ display: 'grid', gap: 16 }}>
+                  {/* Personal Information */}
+                  {card('Personal Information',  (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Email Address</div>
+                        <input className="form-input-dest" value={form.email}
+                          onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
                       </div>
-                      <div className="muted small" style={{ marginTop: 6 }}>
-                        For security, the current password cannot be shown. Enter a new one to change it.
-                      </div>
-                    </div>
-
-                    {/* Sign-in Provider (read-only, from Firebase) */}
-                    <div>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Sign-in Provider</div>
-                      <input
-                        className="form-input"
-                        value={providerLabel}
-                        disabled
-                        style={{ background: '#f9fafb', color: '#111827', fontWeight: 500 }}
-                        aria-readonly="true"
-                      />
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Traveler Name</div>
-                      <input className="form-input" value={form.travelerName}
-                        onChange={(e) => setForm((f) => ({ ...f, travelerName: e.target.value }))} />
-                    </div>
-                  </div>
-                ))}
-
-                {/* Travel Statistics */}
-                {card('Travel Statistics', (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
-                    {/* Places on Trips */}
-                    <div>
-                      <div className="muted small" style={{ marginBottom: 6 }}>Places on Trips</div>
-                      <input className="form-input" min={0}
-                        value={form.stats.placesOnTrips}
-                        onChange={(e) => setForm((f) => ({ ...f, stats: { ...f.stats, placesOnTrips: Number(e.target.value || 0) } }))}
-                      />
-                    </div>
-                    {/* Photos Shared */}
-                    <div>
-                      <div className="muted small" style={{ marginBottom: 6 }}>Photos Shared</div>
-                      <input className="form-input" min={0}
-                        value={form.stats.photosShared}
-                        onChange={(e) => setForm((f) => ({ ...f, stats: { ...f.stats, photosShared: Number(e.target.value || 0) } }))}
-                      />
-                    </div>
-                    {/* Rated Destinations */}
-                    <div>
-                      <div className="muted small" style={{ marginBottom: 6 }}>Rated Destinations</div>
-                      <input className="form-input" min={0}
-                        value={form.stats.ratedDestinations}
-                        onChange={(e) => setForm((f) => ({ ...f, stats: { ...f.stats, ratedDestinations: Number(e.target.value || 0) } }))}
-                      />
-                    </div>
-                    {/* Total Friends */}
-                    <div>
-                      <div className="muted small" style={{ marginBottom: 6 }}>Total Friends</div>
-                      <input className="form-input" min={0}
-                        value={form.stats.friends}
-                        onChange={(e) => setForm((f) => ({ ...f, stats: { ...f.stats, friends: Number(e.target.value || 0) } }))}
-                      />
-                    </div>
-                  </div>
-                ))}
-
-                {/* Travel Interests */}
-                {card('Travel Interests', (
-                  // Show interests from Firebase as chips (read-only display)
-                  <InterestsChips items={form.interests || []} />
-                ))}
-
-                {/* Achievements */}
-                {card('Achievements', (
-                    <>
-                    {(form.achievements || []).map((a, idx) => (
-                        <div
-                          key={idx}
-                          style={{
-                            ...rowBox,
-                            // wider description, no date column
-                            gridTemplateColumns: '56px 1.2fr 2.4fr 110px',
-                            marginBottom: 10
-                          }}
-                        >
-                          {/* Static emoji badge (no dropdown) */}
-                          <div
-                            aria-label="Achievement icon"
-                            title={a.title}
-                            style={{
-                              width: 44,
-                              height: 44,
-                              borderRadius: 8,
-                              background: '#f1f5f9',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontSize: 20
-                            }}
-                          >
-                            {getAchievementEmoji(a)}
-                          </div>
-
-                          {/* Title (kept editable) */}
+                      <div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Password</div>
+                        <div style={{ position: 'relative' }}>
                           <input
-                            className="form-input"
-                            value={a.title}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setForm((f) => {
-                                const next = [...(f.achievements || [])];
-                                next[idx] = { ...next[idx], title: v };
-                                return { ...f, achievements: next };
-                              });
-                            }}
+                            className="form-input-dest"
+                            type={showPwd ? 'text' : 'password'}
+                            value={form.password}
+                            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                            placeholder="Set a new password"
+                            style={{ paddingRight: 38 }}
                           />
-
-                          {/* Description – widened */}
-                          <input
-                            className="form-input"
-                            value={a.desc}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setForm((f) => {
-                                const next = [...(f.achievements || [])];
-                                next[idx] = { ...next[idx], desc: v };
-                                return { ...f, achievements: next };
-                              });
-                            }}
-                            style={{ width: '100%' }}
-                            placeholder="Description"
-                          />
-
-                          {/* Remove button (unchanged) */}
                           <button
                             type="button"
-                            className="btn-danger"
-                            onClick={() =>
-                              setForm((f) => ({
-                                ...f,
-                                achievements: (f.achievements || []).filter((_, i) => i !== idx)
-                              }))
-                            }
-                            style={{ padding: '8px 16px', borderRadius: 8 }}
+                            onClick={() => setShowPwd((v) => !v)}
+                            aria-label={showPwd ? 'Hide password' : 'Show password'}
+                            style={{
+                              position: 'absolute',
+                              right: 8,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              background: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                              fontSize: 16,
+                              color: '#6b7280'
+                            }}
                           >
-                            Remove
+                            {showPwd ? '🙈' : '👁️'}
                           </button>
                         </div>
-                    ))}
-                    <button type="button"
-                        onClick={() => setForm((f) => ({ ...f, achievements: [...(f.achievements || []), { icon: '🏆', title: '', desc: '' }] }))}
-                        style={{ marginTop: 10, background: '#22c55e', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: 8, fontWeight: 500 }}>
-                        + Add Achievement
-                    </button>
-                    </>
-                ))}
-
-                {/* Recent Activity */}
-                {card('Recent Activity', (
-                    <>
-                    {activityLoading ? (
-                      <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
-                        <Spinner size={28} />
+                        <div className="muted small" style={{ marginTop: 6 }}>
+                          For security, the current password cannot be shown. Enter a new one to change it.
+                        </div>
                       </div>
-                    ) : (
+
+                      {/* Sign-in Provider (read-only, from Firebase) */}
+                      <div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Sign-in Provider</div>
+                        <input
+                          className="form-input-dest"
+                          value={providerLabel}
+                          disabled
+                          style={{ background: '#f9fafb', color: '#111827', fontWeight: 500 }}
+                          aria-readonly="true"
+                        />
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Traveler Name</div>
+                        <input className="form-input-dest" value={form.travelerName}
+                          onChange={(e) => setForm((f) => ({ ...f, travelerName: e.target.value }))} />
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Travel Statistics */}
+                  {card('Travel Statistics', (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+                      {/* Places on Trips */}
+                      <div>
+                        <div className="muted small" style={{ marginBottom: 6 }}>Places on Trips</div>
+                        <input className="form-input" min={0}
+                          value={form.stats.placesOnTrips}
+                          onChange={(e) => setForm((f) => ({ ...f, stats: { ...f.stats, placesOnTrips: Number(e.target.value || 0) } }))}
+                        />
+                      </div>
+                      {/* Photos Shared */}
+                      <div>
+                        <div className="muted small" style={{ marginBottom: 6 }}>Photos Shared</div>
+                        <input className="form-input" min={0}
+                          value={form.stats.photosShared}
+                          onChange={(e) => setForm((f) => ({ ...f, stats: { ...f.stats, photosShared: Number(e.target.value || 0) } }))}
+                        />
+                      </div>
+                      {/* Rated Destinations */}
+                      <div>
+                        <div className="muted small" style={{ marginBottom: 6 }}>Rated Destinations</div>
+                        <input className="form-input" min={0}
+                          value={form.stats.ratedDestinations}
+                          onChange={(e) => setForm((f) => ({ ...f, stats: { ...f.stats, ratedDestinations: Number(e.target.value || 0) } }))}
+                        />
+                      </div>
+                      {/* Total Friends */}
+                      <div>
+                        <div className="muted small" style={{ marginBottom: 6 }}>Total Friends</div>
+                        <input className="form-input" min={0}
+                          value={form.stats.friends}
+                          onChange={(e) => setForm((f) => ({ ...f, stats: { ...f.stats, friends: Number(e.target.value || 0) } }))}
+                        />
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Travel Interests */}
+                  {card('Travel Interests', (
+                    // Show interests from Firebase as chips (read-only display)
+                    <InterestsChips items={form.interests || []} />
+                  ))}
+
+                  {/* Achievements */}
+                  {card('Achievements', (
                       <>
-                      {(form.activity || []).map((a, idx) => {
-                          const type = a.type || 'Activity';
-                          const abbr = (type === 'Photo' ? 'Ph' :
-                                        type === 'Review' ? 'Rv' :
-                                        type === 'Visit' ? 'Vi' :
-                                        type === 'Friend' ? 'Fr' : 'Ac');
-                          const badgeBg = type === 'Photo' ? '#dbeafe'
-                                        : type === 'Review' ? '#ede9fe'
-                                        : type === 'Visit' ? '#dcfce7'
-                                        : type === 'Friend' ? '#fee2e2'
-                                        : '#f3f4f6';
-                          const badgeColor = type === 'Photo' ? '#1d4ed8'
-                                          : type === 'Review' ? '#6d28d9'
-                                          : type === 'Visit' ? '#047857'
-                                          : type === 'Friend' ? '#b91c1c'
-                                          : '#374151';
-                          return (
-                            <div key={idx} style={{ ...rowBox, marginBottom: 10 }}>
-                              <div
-                                title={type}
-                                style={{
-                                  width: 40,
-                                  textAlign: 'center',
-                                  fontWeight: 700,
-                                  borderRadius: 8,
-                                  padding: '6px 0',
-                                  background: badgeBg,
-                                  color: badgeColor
-                                }}
-                              >
-                                {abbr}
-                              </div>
-                              <input className="form-input" value={a.text}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setForm((f) => {
-                                    const next = [...(f.activity || [])];
-                                    next[idx] = { ...next[idx], text: v }; return { ...f, activity: next };
-                                  });
-                                }} />
-                              <input className="form-input" value={a.date}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setForm((f) => {
-                                    const next = [...(f.activity || [])];
-                                    next[idx] = { ...next[idx], date: v }; return { ...f, activity: next };
-                                  });
-                                }} />
-                              <button type="button" className="btn-danger"
-                                onClick={() => setForm((f) => ({ ...f, activity: (f.activity || []).filter((_, i) => i !== idx) }))}
-                                style={{ gridColumn: '5 / 6', padding: '8px 16px', borderRadius: 8 }}>Remove</button>
+                      {(form.achievements || []).map((a, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              ...rowBox,
+                              // wider description, no date column
+                              gridTemplateColumns: '56px 1.2fr 2.4fr 110px',
+                              marginBottom: 10
+                            }}
+                          >
+                            {/* Static emoji badge (no dropdown) */}
+                            <div
+                              aria-label="Achievement icon"
+                              title={a.title}
+                              style={{
+                                width: 44,
+                                height: 44,
+                                borderRadius: 8,
+                                background: '#f1f5f9',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 20
+                              }}
+                            >
+                              {getAchievementEmoji(a)}
+                            </div>
+
+                            {/* Title (kept editable) */}
+                            <input
+                              className="form-input"
+                              value={a.title}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setForm((f) => {
+                                  const next = [...(f.achievements || [])];
+                                  next[idx] = { ...next[idx], title: v };
+                                  return { ...f, achievements: next };
+                                });
+                              }}
+                            />
+
+                            {/* Description – widened */}
+                            <input
+                              className="form-input"
+                              value={a.desc}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setForm((f) => {
+                                  const next = [...(f.achievements || [])];
+                                  next[idx] = { ...next[idx], desc: v };
+                                  return { ...f, achievements: next };
+                                });
+                              }}
+                              style={{ width: '100%' }}
+                              placeholder="Description"
+                            />
                           </div>
-                          );
-                      })}
+                      ))}
                       <button type="button"
-                          onClick={() => setForm((f) => ({ ...f, activity: [...(f.activity || []), { type: 'Photo', text: '', date: '' }] }))}
+                          onClick={() => setForm((f) => ({ ...f, achievements: [...(f.achievements || []), { icon: '🏆', title: '', desc: '' }] }))}
                           style={{ marginTop: 10, background: '#22c55e', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: 8, fontWeight: 500 }}>
-                        + Add Activity
+                          + Add Achievement
                       </button>
                       </>
-                    )}
-                    </>
-                ))}
-                </>
+                  ))}
+
+                  {/* Recent Activity */}
+                  {card('Recent Activity', (
+                      <>
+                      {activityLoading ? (
+                        <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
+                          <Spinner size={28} />
+                        </div>
+                      ) : (
+                        <>
+                        {(form.activity || []).map((a, idx) => {
+                            const type = a.type || 'Activity';
+                            const abbr = (type === 'Photo' ? 'Ph' :
+                                          type === 'Review' ? 'Rv' :
+                                          type === 'Visit' ? 'Vi' :
+                                          type === 'Friend' ? 'Fr' : 'Ac');
+                            const badgeBg = type === 'Photo' ? '#dbeafe'
+                                          : type === 'Review' ? '#ede9fe'
+                                          : type === 'Visit' ? '#dcfce7'
+                                          : type === 'Friend' ? '#fee2e2'
+                                          : '#f3f4f6';
+                            const badgeColor = type === 'Photo' ? '#1d4ed8'
+                                            : type === 'Review' ? '#6d28d9'
+                                            : type === 'Visit' ? '#047857'
+                                            : type === 'Friend' ? '#b91c1c'
+                                            : '#374151';
+                            return (
+                              <div key={idx} style={{ ...rowBox, marginBottom: 10 }}>
+                                <div
+                                  title={type}
+                                  style={{
+                                    width: 40,
+                                    textAlign: 'center',
+                                    fontWeight: 700,
+                                    borderRadius: 8,
+                                    padding: '6px 0',
+                                    background: badgeBg,
+                                    color: badgeColor
+                                  }}
+                                >
+                                  {abbr}
+                                </div>
+                                <input className="form-input" value={a.text}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setForm((f) => {
+                                      const next = [...(f.activity || [])];
+                                      next[idx] = { ...next[idx], text: v }; return { ...f, activity: next };
+                                    });
+                                  }} />
+                                <input className="form-input" value={a.date}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setForm((f) => {
+                                      const next = [...(f.activity || [])];
+                                      next[idx] = { ...next[idx], date: v }; return { ...f, activity: next };
+                                    });
+                                  }} />
+                            </div>
+                            );
+                        })}
+                        <button type="button"
+                            onClick={() => setForm((f) => ({ ...f, activity: [...(f.activity || []), { type: 'Photo', text: '', date: '' }] }))}
+                            style={{ marginTop: 10, background: '#22c55e', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: 8, fontWeight: 500 }}>
+                          + Add Activity
+                        </button>
+                        </>
+                      )}
+                      </>
+                  ))}
+                </div>
+              </>
             )}
 
             {tab === 'profile' && (
