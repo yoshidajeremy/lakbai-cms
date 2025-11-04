@@ -556,7 +556,7 @@ const payload = {
   return (
     <form className="content-form" onSubmit={submit}>
       <div className="tabs" style={{ borderBottom: '1px solid #eef2f7', marginBottom: 16 }}>
-        {['content', 'media', 'seo', 'settings'].map((t) => (
+        {['content', 'media', 'settings'].map((t) => (
           <button
             type="button"
             key={t}
@@ -840,33 +840,6 @@ const payload = {
               </div>
             ) : null}
           </div>
-        </div>
-      )}
-
-      {activeTab === 'seo' && (
-        <div>
-          <label>Meta Title</label>
-          <input
-            value={data.seo?.metaTitle || ''}
-            onChange={(e) =>
-              setData({ ...data, seo: { ...(data.seo || {}), metaTitle: e.target.value } })
-            }
-            className="form-input-dest"
-          />
-          <label>Meta Description</label>
-          <textarea
-            value={data.seo?.metaDescription || ''}
-            onChange={(e) =>
-              setData({ ...data, seo: { ...(data.seo || {}), metaDescription: e.target.value } })
-            }
-            className="form-input-dest"
-          />
-          <label>Keywords</label>
-          <TagInput
-            tags={(data.seo && data.seo.keywords) || []}
-            onChange={(k) => setData({ ...data, seo: { ...(data.seo || {}), keywords: k } })}
-            placeholder="Add keywords..."
-          />
         </div>
       )}
 

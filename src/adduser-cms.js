@@ -1,4 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
+import './Styles/contentManager.css';
+import { db, auth } from './firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 // Cloudinary (unsigned) for optional photo upload
 const CLOUDINARY_UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || 'lakbai_preset';
@@ -65,6 +68,26 @@ const [form, setForm] = useState({
     status: 'active',
     stats: { places: 0, photos: 0, reviews: 0, friends: 0 },
 });
+React.useEffect(() => {
+    if (!open) return;
+    const uid = auth?.currentUser?.uid;
+    if (!uid) return;
+    if ((form.travelerBio || '').trim()) return; // do not overwrite if already set
+
+    let alive = true;
+    (async () => {
+    try {
+        const snap = await getDoc(doc(db, 'users', uid));
+        const bio = snap.exists() ? (snap.data().travelerBio || '') : '';
+        if (alive && bio) {
+        setForm(f => ({ ...f, travelerBio: bio }));
+        }
+    } catch (e) {
+        console.warn('load travelerBio failed', e);
+    }
+    })();
+    return () => { alive = false; };
+}, [open]);
 
 const [showPwd, setShowPwd] = useState(false);
 const [submitting, setSubmitting] = useState(false);
@@ -181,7 +204,7 @@ return (
                     <div>
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Email Address</div>
                     <input
-                        className="form-input"
+                        className="form-input-dest"
                         type="email"
                         required
                         value={form.email}
@@ -200,7 +223,7 @@ return (
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Password</div>
                     <div style={{ position: 'relative' }}>
                         <input
-                            className="form-input"
+                            className="form-input-dest"
                             type={showPwd ? 'text' : 'password'}
                             value={form.password}
                             onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
@@ -240,7 +263,7 @@ return (
                 <div>
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Sign-in Provider</div>
                     <select
-                        className="form-input"
+                        className="form-input-dest"
                         value={form.provider}
                         onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value }))}
                     >
@@ -254,7 +277,7 @@ return (
                 <div>
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Traveler Name</div>
                     <input
-                        className="form-input"
+                        className="form-input-dest"
                         value={form.travelerName}
                         onChange={(e) => setForm((f) => ({ ...f, travelerName: e.target.value }))}
                     />
@@ -333,7 +356,7 @@ return (
               {/* Traveler Bio (blank) */}
             <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 8 }}>Traveler Bio</div>
             <textarea
-                className="form-input"
+                className="form-input-dest"
                 value={form.travelerBio}
                 onChange={(e) => setForm((f) => ({ ...f, travelerBio: e.target.value }))}
                 placeholder="Tell something about the traveler..."
