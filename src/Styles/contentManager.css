@@ -142,6 +142,9 @@ body { overflow-y: auto; }
 }
 }
 
+.form-input-dest{display:block;width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:#fbfcfe;font-size:14px;color:#0f172a;outline:none}
+.form-input-dest:focus{box-shadow:0 6px 20px rgba(59,130,246,0.08);border-color:#cfe4ff}
+
 /* end of file */
         
         /* --- Sidebar: visual match to screenshot --- */
