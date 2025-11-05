@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { getFirestore, collection, query, where, getCountFromServer, getDocs, doc, getDoc, collectionGroup, orderBy, limit, addDoc } from 'firebase/firestore';
+import { getFirestore, collection, query, where, getCountFromServer, getDocs, doc, getDoc, collectionGroup, orderBy, limit, addDoc, setDoc } from 'firebase/firestore'
 import { listenUserStats } from './user-stats-cms';
 import './Styles/contentManager.css';
 
@@ -538,11 +538,26 @@ async function loadUserBioFromFirebase(userObj) {
     const ds = await getDoc(doc(db, 'users', uid));
     if (ds.exists()) {
       const data = ds.data() || {};
-      const bio = data.bio ?? data.profile?.bio ?? data.travelerBio ?? '';
+      // Prefer top-level users/{uid}.bio, then fallback to profile.bio
+      const bio = (data.bio ?? data.profile?.bio ?? '');
       return typeof bio === 'string' ? bio : String(bio || '');
     }
   } catch {}
   return null;
+}
+async function saveUserBioToFirebase(userObj, bio) {
+  try {
+    const uid = userObj?.id || userObj?.uid;
+    if (!uid) return;
+    const db = getFirestore();
+    await setDoc(
+      doc(db, 'users', uid),
+      { bio: typeof bio === 'string' ? bio : String(bio || '') },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn('Failed to save bio to Firestore:', e?.message);
+  }
 }
 
 // Fetch traveler name from users/{uid}.displayName (with gentle fallbacks)
@@ -715,7 +730,7 @@ export default function EditProfileCMS({
     provider: providerLabel,
     travelerName: user?.travelerName || user?.name || '',
     photoURL: user?.photoURL || user?.avatar || user?.avatarUrl || user?.profilePhoto || '',
-    travelerBio: user?.travelerBio || user?.bio || '',
+    bio: user?.bio || '',
     status: toUiStatus(user?.status || 'active'),
     stats: {
       places: user?.stats?.places ?? user?.placesCount ?? 0,
@@ -745,8 +760,17 @@ export default function EditProfileCMS({
   const initialValuesRef = useRef({
     travelerName: user?.travelerName || user?.name || '',
     photoURL: user?.photoURL || user?.avatar || user?.avatarUrl || user?.profilePhoto || '',
-    travelerBio: user?.travelerBio || user?.bio || '',
+    bio: user?.bio || '',
   });
+
+  // Keep initial values in sync when user changes
+  useEffect(() => {
+    initialValuesRef.current = {
+      travelerName: user?.travelerName || user?.name || '',
+      photoURL: user?.photoURL || user?.avatar || user?.avatarUrl || user?.profilePhoto || '',
+      bio: user?.bio || '',
+    };
+  }, [user]);
 
   useEffect(() => { 
     setTab(TABS.includes(initialTab) ? initialTab : 'basic'); 
@@ -869,7 +893,7 @@ export default function EditProfileCMS({
       try {
         const bio = await loadUserBioFromFirebase(user);
         if (alive && typeof bio === 'string' && bio.length) {
-          setForm((f) => ({ ...f, travelerBio: bio }));
+          setForm((f) => ({ ...f, bio: bio }));
         }
       } catch (e) {
         console.warn('Failed to load user bio:', e?.message);
@@ -925,13 +949,13 @@ export default function EditProfileCMS({
       travelerName: form.travelerName,
       provider: form.provider,
       photoURL: form.photoURL || '',
-      travelerBio: form.travelerBio || '',
+      bio: form.bio || '',
       status: toStoredStatus(form.status),
       stats: { ...form.stats },
       interests: form.interests,
     };
 
-    // Only send password if admin typed a new one (Firebase cannot reveal current password)
+    // Only send password if admin typed a new one
     const pwd = String(form.password || '');
     if (pwd && pwd !== '••••••••') {
       payload.password = pwd;
@@ -943,8 +967,7 @@ export default function EditProfileCMS({
     const oldVals = {};
     const newVals = {};
 
-    // Compare fields for changes
-    ["travelerName", "photoURL", "travelerBio"].forEach((field) => {
+    ["travelerName", "photoURL", "bio"].forEach((field) => {
       if (payload[field] !== initialValuesRef.current[field]) {
         changes[field] = true;
         oldVals[field] = initialValuesRef.current[field];
@@ -952,10 +975,14 @@ export default function EditProfileCMS({
       }
     });
 
-    // If any of the tracked fields changed, write audit log
     if (Object.keys(changes).length > 0) {
       const deviceInfo = getDeviceInfo();
       const sessionId = generateSessionId();
+
+      // Ensure no undefined is sent to Firestore
+      const safeOld = sanitizeForFirestore(oldVals);
+      const safeNew = sanitizeForFirestore(newVals);
+
       await addDoc(collection(db, "auditLogs"), {
         timestamp: Date.now(),
         userName: user?.travelerName || user?.name || "",
@@ -974,17 +1001,20 @@ export default function EditProfileCMS({
         ipAddress: "",
         location: "",
         session: sessionId,
-        target: `user_profile${user?.id ? ` (${user.id})` : ""}`,
         dataChanges: {
-          old: oldVals,
-          new: newVals,
+          old: safeOld,
+          new: safeNew,
         },
       });
     }
 
+    // Write bio to users/{uid}.bio if changed
+    if (payload.bio !== initialValuesRef.current.bio) {
+      await saveUserBioToFirebase(user, payload.bio);
+    }
+
     onSave?.(payload);
   };
-
   const avatarInitial = (form.travelerName || form.email || 'U').trim().charAt(0).toUpperCase();
 
     const card = (title, children, style = {}) => (
@@ -1353,8 +1383,8 @@ export default function EditProfileCMS({
                 <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 8 }}>Traveler Bio</div>
                 <textarea
                   className="form-input"
-                  value={form.travelerBio}
-                  onChange={(e) => setForm((f) => ({ ...f, travelerBio: e.target.value }))}
+                  value={form.bio}
+                  onChange={(e) => setForm((f) => ({ ...f, bio: e.target.value }))}
                   placeholder="Tell something about the traveler..."
                   style={{
                     width: '100%',
@@ -1487,4 +1517,19 @@ export async function fetchAllUsersTravelStats() {
   }
 
   return results;
+}
+
+// Deep-sanitize any object so it’s Firestore-safe (no undefined values)
+function sanitizeForFirestore(value) {
+  if (value === undefined) return null;            // convert undefined -> null
+  if (Array.isArray(value)) return value.map(sanitizeForFirestore);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      const sv = sanitizeForFirestore(v);
+      if (sv !== undefined) out[k] = sv;
+    }
+    return out;
+  }
+  return value;
 }

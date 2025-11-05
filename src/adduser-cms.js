@@ -64,7 +64,7 @@ const [form, setForm] = useState({
     provider: 'Email',
     travelerName: '',
     photoURL: '',
-    travelerBio: '',
+    bio: '',
     status: 'active',
     stats: { places: 0, photos: 0, reviews: 0, friends: 0 },
 });
@@ -72,18 +72,18 @@ React.useEffect(() => {
     if (!open) return;
     const uid = auth?.currentUser?.uid;
     if (!uid) return;
-    if ((form.travelerBio || '').trim()) return; // do not overwrite if already set
+    if ((form.bio || '').trim()) return; // do not overwrite if already set
 
     let alive = true;
     (async () => {
     try {
         const snap = await getDoc(doc(db, 'users', uid));
-        const bio = snap.exists() ? (snap.data().travelerBio || '') : '';
+        const bio = snap.exists() ? (snap.data().bio || '') : '';
         if (alive && bio) {
-        setForm(f => ({ ...f, travelerBio: bio }));
+        setForm(f => ({ ...f, bio }));
         }
     } catch (e) {
-        console.warn('load travelerBio failed', e);
+        console.warn('load bio failed', e);
     }
     })();
     return () => { alive = false; };
@@ -136,7 +136,7 @@ const submit = async (e) => {
             email: form.email,
             provider: form.provider,
             status: form.status,
-            travelerBio: form.travelerBio,
+            bio: form.bio,
             // Extra fields included but safe to ignore by current handler:
             photoURL: form.photoURL,
             stats: { ...form.stats },
@@ -357,8 +357,8 @@ return (
             <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 8 }}>Traveler Bio</div>
             <textarea
                 className="form-input-dest"
-                value={form.travelerBio}
-                onChange={(e) => setForm((f) => ({ ...f, travelerBio: e.target.value }))}
+                value={form.bio}
+                onChange={(e) => setForm((f) => ({ ...f, bio: e.target.value }))}
                 placeholder="Tell something about the traveler..."
                 style={{
                     width: '100%',
