@@ -520,8 +520,6 @@ export default function ViewProfileCMS({
                 )}
               </div>
             </div>
-
-            <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 0 }} />
           </div>
         )}
 
