@@ -7,6 +7,35 @@ if (n == null) return '';
 const u = ['B','KB','MB','GB']; let i=0; while(n>=1024 && i<u.length-1){n/=1024;i++} return `${n.toFixed(1)} ${u[i]}`;
 }
 
+// Pretty date for the "Last Modified" column (handles seconds/ms/date/string)
+function formatLastModified(v) {
+  if (!v) return '—';
+  let d = null;
+  if (v instanceof Date) d = v;
+  else if (typeof v === 'number') d = new Date(v < 1e12 ? v * 1000 : v);
+  else if (typeof v === 'string') {
+    const n = Number(v);
+    d = isNaN(n) ? new Date(v) : new Date(n < 1e12 ? n * 1000 : n);
+  } else if (v?.toDate) {
+    d = v.toDate();
+  }
+  if (!d || isNaN(d.getTime())) return '—';
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+// Pick best available modified field from an item
+function getItemLastModified(item) {
+  // Common API shapes: mtimeMs, mtime, lastModified, updatedAt, modified
+  return (
+    item?.mtimeMs ??
+    item?.mtime ??
+    item?.lastModified ??
+    item?.updatedAt ??
+    item?.modified ??
+    null
+  );
+}
+
 async function blobToBase64(blob) {
     return await new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -69,19 +98,19 @@ const segments = cwd.split('/').filter(Boolean);
 
 
 const refresh = React.useCallback(async () => {
-  setLoading(true); setError('');
-  try {
+setLoading(true); setError('');
+try {
     const data = await filesApi.list(cwd);
     const list = Array.isArray(data) ? data : []; // guard
     // normalize: directories first
     list.sort((a, b) => (a.type === b.type) ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1));
     setItems(list);
-  } catch (e) {
+} catch (e) {
     setItems([]);
     setError(e?.message || String(e));
-  } finally {
+} finally {
     setLoading(false);
-  }
+}
 }, [cwd]);
 
 React.useEffect(() => { refresh(); }, [refresh]);
@@ -110,52 +139,52 @@ const onCreateFile = () => {
 };
 
 const onDownload = async (item) => {
-  try {
+try {
     const { contentBase64, mediaType } = await filesApi.get(item.path);
     const blob = new Blob([Uint8Array.from(atob(contentBase64), c => c.charCodeAt(0))],
-                          { type: mediaType || 'application/octet-stream' });
+                            { type: mediaType || 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = item.name;
     document.body.appendChild(a); a.click();
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
-  } catch (e) {
+} catch (e) {
     setError(e?.message || String(e));
-  }
+}
 };
 
 const onMkdir = () => setModal({ open: true, type: 'folder', value: '' });
 const handleCreateFolder = async () => {
-  try {
+try {
     const name = modal.value.trim();
     if (!name) return;
     setModal({ open: false, type: '', value: '' });
     const path = `${cwd}/${name}`.replace(/\/+/g, '/');
     await filesApi.mkdir({ path, message: `Create folder ${path}` });
     await refresh();
-  } catch (e) {
+} catch (e) {
     setError(e?.message || String(e));
-  }
+}
 };
 
 const onRename = (item) => {
     setRenameModal({ open: true, item, value: item.name });
 };
 const handleRename = async () => {
-  try {
+try {
     const name = renameModal.value.trim();
     if (!name || name === renameModal.item.name) {
-      setRenameModal({ open: false, item: null, value: '' });
-      return;
+        setRenameModal({ open: false, item: null, value: '' });
+        return;
     }
     const fromPath = renameModal.item.path;
     const toPath = `${cwd}/${name}`.replace(/\/+/g, '/');
     setRenameModal({ open: false, item: null, value: '' });
     await filesApi.rename({ fromPath, toPath, message: `Rename ${fromPath} -> ${toPath}` });
     await refresh();
-  } catch (e) {
+} catch (e) {
     setError(e?.message || String(e));
-  }
+}
 };
 const handleCreateFile = async () => {
 try {
@@ -182,34 +211,34 @@ try {
 };
 
 const onDelete = async (item) => {
-  try {
+try {
     const ok = await askConfirm(`Delete ${item.path}?`);
     if (!ok) return;
     await filesApi.delete({ path: item.path, message: `Delete ${item.path}` });
     await refresh();
-  } catch (e) {
+} catch (e) {
     setError(e?.message || String(e));
-  }
+}
 };
 
 const openPreview = async (item) => {
-  try {
+try {
     if (item.type !== 'file') return;
     const { contentBase64, mediaType, sha } = await filesApi.get(item.path);
     const raw = (() => {
-      try { return decodeURIComponent(escape(atob(contentBase64))); } catch { return ''; }
+        try { return decodeURIComponent(escape(atob(contentBase64))); } catch { return ''; }
     })();
     if (item.name.toLowerCase().endsWith('.csv')) {
-      const rows = normalizeCsvRows(parseCsv(raw));
-      setCsvEdit({ path: item.path, rows, raw, sha, mediaType });
-      setPreview(null);
+        const rows = normalizeCsvRows(parseCsv(raw));
+        setCsvEdit({ path: item.path, rows, raw, sha, mediaType });
+        setPreview(null);
     } else {
-      setPreview({ path: item.path, contentBase64, mediaType });
-      setCsvEdit(null);
+        setPreview({ path: item.path, contentBase64, mediaType });
+        setCsvEdit(null);
     }
-  } catch (e) {
+} catch (e) {
     setError(e?.message || String(e));
-  }
+}
 };
 
   // Update a single cell (kept as-is)
@@ -390,6 +419,7 @@ return (
         <thead>
             <tr>
             <th style={{ textAlign:'left' }}>Name</th>
+            <th style={{ textAlign:'center' }}>Last Modified</th>
             <th style={{ textAlign:'left', width:120 }}>Type</th>
             <th style={{ textAlign:'right', width:120 }}>Size</th>
             <th style={{ width:240 }}></th>
@@ -409,6 +439,7 @@ return (
                     <a href="#" onClick={(e)=>{e.preventDefault(); openPreview(item);}}>{item.name}</a>
                 )}
                 </td>
+                <td>{formatLastModified(getItemLastModified(item))}</td>
                 <td>{item.type}</td>
                 <td style={{ textAlign:'right' }}>{item.type === 'file' ? bytes(item.size) : ''}</td>
                 <td className="actions" style={{ textAlign:'right' }}>
