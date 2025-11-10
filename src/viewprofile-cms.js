@@ -75,6 +75,9 @@ export default function ViewProfileCMS({
     ratedDestinations: 0,
     friends: 0,
   });
+  // NEW: violations state
+  const [violations, setViolations] = useState([]);
+  const [violationsLoading, setViolationsLoading] = useState(false);
 
   useEffect(() => { if (open) setTab('overview'); }, [open]);
 
@@ -296,6 +299,29 @@ export default function ViewProfileCMS({
     };
   }, [open, user]);
 
+  // NEW: violations state
+  useEffect(() => {
+    let alive = true;
+    if (!open || !uid) return;
+
+    (async () => {
+      try {
+        setViolationsLoading(true);
+
+        // Use robust loader (keeps prior behavior and adds support for 'reports' + multiple field names)
+        const list = await loadViolationsForUser(db, uid);
+
+        if (alive) setViolations(list);
+      } catch {
+        if (alive) setViolations([]);
+      } finally {
+        if (alive) setViolationsLoading(false);
+      }
+    })();
+
+    return () => { alive = false; };
+  }, [open, uid]);
+
   const resolvedStats = useMemo(() => {
     if (!stats) return { places: 0, photos: 0, reviews: 0, friends: 0 };
     // allow either map-by-user or direct object
@@ -384,7 +410,7 @@ export default function ViewProfileCMS({
 
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 40, padding: '0 28px', borderBottom: '1px solid #e5e7eb', marginBottom: 0 }}>
-          {['overview', 'achievements'].map((t) => (
+          {['overview', 'achievements', 'violations'].map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -562,6 +588,39 @@ export default function ViewProfileCMS({
           </div>
         )}
 
+        {/* VIOLATIONS tab (matches screenshot) */}
+        {tab === 'violations' && (
+          <div style={{ padding: '28px', background: '#f8fafc' }}>
+            <div style={{ fontSize: 17, marginBottom: 18 }}>Violations</div>
+            {violationsLoading ? (
+              <div className="centered" style={{ padding: 40 }}>
+                <div className="loading-spinner" />
+              </div>
+            ) : violations.length === 0 ? (
+              <div className="muted" style={{ padding: 24 }}>No violations recorded.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {violations.map((v) => (
+                  <div key={v.id} style={{
+                    background: '#fff',
+                    borderRadius: 12,
+                    boxShadow: '0 2px 10px rgba(0,0,0,.04)',
+                    padding: 16,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                      <span style={{ background: '#e0e7ff', color: '#2563eb', fontWeight: 700, padding: '4px 10px', borderRadius: 999, fontSize: 12 }}>
+                        {v.contentType}
+                      </span>
+                      <span style={{ color: '#6b7280', fontSize: 12 }}>{fmtDateTime(v.createdAt)}</span>
+                    </div>
+                    <div style={{ fontWeight: 600 }}>{v.reasonLabel}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Recent Activity (moved from Travel to match screenshot) */}
         {userEditOpen && editingUser && userEditTab === 'travel' && (
           <div style={{ marginBottom: 24 }}>
@@ -724,3 +783,90 @@ const rowBox = {
   borderRadius: 8,
   padding: '10px 12px'
 };
+
+// Normalize a report doc -> UI item
+function normalizeViolationDoc(d, colName) {
+  const data = d?.data?.() ?? d ?? {};
+  return {
+    id: `${colName}/${d.id || data.id || crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`,
+    reasonLabel: data.reasonLabel || data.reason || data.reasonText || data.type || 'Violation',
+    contentType: data.contentType || data.subject?.type || data.collection || data.content?.type || 'Content',
+    createdAt: data.createdAt || data.timestamp || data.date || null,
+    _raw: data
+  };
+}
+
+// Check if a report belongs to the user
+function reportBelongsTo(uid, data) {
+  if (!uid || !data) return false;
+  return (
+    (data.reportedUser && String(data.reportedUser) === String(uid)) ||
+    (data.reportedUserId && String(data.reportedUserId) === String(uid)) ||
+    (data.userId && String(data.userId) === String(uid)) ||
+    (data.subject?.userId && String(data.subject.userId) === String(uid))
+  );
+}
+
+// Fetch violations for a user from a single collection name
+async function fetchViolationsFromCollection(db, colName, uid) {
+  const out = [];
+  try {
+    // Prefer filtered + ordered query (if index exists)
+    const base = collection(db, colName);
+
+    // Try multiple common field names. Each query is independent; we merge results.
+    const queries = [
+      query(base, where('reportedUser', '==', uid), orderBy('createdAt', 'desc')),
+      query(base, where('reportedUserId', '==', uid), orderBy('createdAt', 'desc')),
+      query(base, where('userId', '==', uid), orderBy('createdAt', 'desc')),
+      // Dot-path if subject.userId is stored
+      query(base, where('subject.userId', '==', uid), orderBy('createdAt', 'desc')),
+    ];
+
+    for (const q of queries) {
+      const snap = await getDocs(q).catch(async () => {
+        // Fallback if no index for orderBy
+        const noOrder = q._queryOptions
+          ? query(q._queryOptions.parent, ...q._queryOptions.fieldFilters || [])
+          : query(base, where('reportedUser', '==', uid));
+        return await getDocs(noOrder);
+      });
+      snap?.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        if (reportBelongsTo(uid, data)) out.push(normalizeViolationDoc(docSnap, colName));
+      });
+    }
+
+    // If still empty, do a light sweep (no filters) and client-filter as a last resort
+    if (out.length === 0) {
+      const sweep = await getDocs(base);
+      sweep.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        if (reportBelongsTo(uid, data)) out.push(normalizeViolationDoc(docSnap, colName));
+      });
+    }
+  } catch {
+    // swallow; we’ll try other collections
+  }
+  return out;
+}
+
+// Try both 'reports' and 'report' and merge/dedupe
+async function loadViolationsForUser(db, uid) {
+  const lists = await Promise.all([
+    fetchViolationsFromCollection(db, 'reports', uid),
+    fetchViolationsFromCollection(db, 'report', uid),
+  ]);
+  const merged = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const it of list) {
+      if (seen.has(it.id)) continue;
+      seen.add(it.id);
+      merged.push(it);
+    }
+  }
+  // newest first
+  merged.sort((a, b) => (toDateSafe(b.createdAt)?.getTime?.() || 0) - (toDateSafe(a.createdAt)?.getTime?.() || 0));
+  return merged;
+}

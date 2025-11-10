@@ -1,4 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import './Styles/contentManager.css';
+// NEW: firebase + rules
+import { getFirestore, doc, updateDoc, arrayUnion, serverTimestamp, deleteDoc, collection, query, where, getDocs, getCountFromServer } from 'firebase/firestore';
+import { action_types } from './rules';
+
 
 // Fallback badges (kept simple and self-contained)
 const Badge = ({ bg, color, children }) => (
@@ -43,6 +48,117 @@ function normalizeReportedContent(report) {
   };
 }
 
+// Helper: auto-detect a canonical reason from the report payload & its content text
+function autoDetectReason(report) {
+  if (!report) return '';
+  const raw = [
+    report.reason,
+    report.description,
+    report.content?.body,
+    report.content?.text,
+    report.content?.message,
+    report.content?.title
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (!raw) return '';
+
+  // Direct mapping keywords -> canonical label
+  const MATCHERS = [
+    { label: 'Hate Speech', patterns: ['hate speech', 'hate', 'bigotry', 'intolerance'] },
+    { label: 'Violence/Threats', patterns: ['threat', 'violence', 'violent', 'aggression'] },
+    { label: 'Harassment/Bullying', patterns: ['harassment', 'bullying', 'harass', 'bully'] },
+    { label: 'Spam/Promotional Content', patterns: ['spam', 'promotional', 'advertisement', 'marketing', 'promotion'] },
+    { label: 'Fake/Misleading Content', patterns: ['fake', 'misleading', 'scam', 'false info', 'disinformation'] },
+    { label: 'Copyright Violation', patterns: ['copyright', 'dmca', 'plagiarism', 'copyrighted'] },
+    { label: 'Privacy Violation', patterns: ['privacy', 'dox', 'personal info', 'address leak'] },
+    { label: 'Inappropriate Content', patterns: ['inappropriate', 'nsfw', 'explicit', 'obscene'] }
+  ];
+
+  // If original reason already matches a canonical label, return it
+  const canonicalLabels = MATCHERS.map(m => m.label);
+  if (canonicalLabels.some(l => raw.includes(l.toLowerCase()))) {
+    return canonicalLabels.find(l => raw.includes(l.toLowerCase())) || '';
+  }
+
+  for (const m of MATCHERS) {
+    if (m.patterns.some(p => raw.includes(p))) return m.label;
+  }
+  return 'Other';
+}
+
+// NEW: read how many violations the viewed user had (from `report` collection)
+async function getUserViolationCount({ userId, userName }) {
+  try {
+    const db = getFirestore();
+    const col = collection(db, 'report');
+
+    // Prefer userId if present
+    if (userId) {
+      const qById = query(col, where('reportedUserId', '==', userId));
+      try {
+        const countSnap = await getCountFromServer(qById);
+        const c = countSnap.data().count || 0;
+        if (c > 0) return c;
+      } catch {
+        const docs = await getDocs(qById);
+        if (!docs.empty) return docs.size;
+      }
+    }
+
+    // Fallback to userName if needed
+    if (userName) {
+      const qByName = query(col, where('reportedUser', '==', userName));
+      try {
+        const countSnap = await getCountFromServer(qByName);
+        return countSnap.data().count || 0;
+      } catch {
+        const docs = await getDocs(qByName);
+        return docs.size;
+      }
+    }
+
+    return 0;
+  } catch (e) {
+    console.warn('getUserViolationCount error:', e?.message || e);
+    return 0;
+  }
+}
+
+// NEW: map reason label to rules.js key (e.g., "Spam/Promotional Content" -> "Spam_Promotional_Content")
+function reasonLabelToKey(label) {
+  if (!label) return '';
+  return String(label).trim().replace(/[\/\s]+/g, '_');
+}
+
+// NEW: compute recommended action based on updated policy:
+// Only two possible recommendations:
+// - Suspend Account (>=3 reports, any violation type)
+// - Ban Account (>=15 reports, any violation type)
+// Otherwise no recommendation (null) so UI shows fallback.
+function getRecommendedAction(violationCount, reasonLabel) {
+  const key = reasonLabelToKey(reasonLabel);
+  if (violationCount >= 15) {
+    return {
+      action: 'Ban Account',
+      reason: reasonLabel,
+      template: (action_types?.Ban_Account && action_types.Ban_Account[0]) ||
+        'Account banned due to repeated violations.'
+    };
+  }
+  if (violationCount >= 3) {
+    return {
+      action: 'Suspend Account',
+      reason: reasonLabel,
+      template: action_types?.Suspend_Account?.[key]?.[0] ||
+        'Your account is suspended due to repeated violations.'
+    };
+  }
+  return null; // < 3 reports: no escalation yet
+}
+
 const ReportDetailModal = ({ report, onClose, onTakeAction, userNameCache = {} }) => {
   // Always call hooks; attach listeners only when report exists
   useEffect(() => {
@@ -54,6 +170,60 @@ const ReportDetailModal = ({ report, onClose, onTakeAction, userNameCache = {} }
     return () => window.removeEventListener('keydown', onKey);
   }, [report, onClose]);
 
+  // NEW: hooks must be before any early return
+  const [violationCount, setViolationCount] = useState(null);
+  const [recAction, setRecAction] = useState(null);
+
+  // NEW: compute ruId/ruName safely even if report is null
+  const ruId =
+    report?.reportedUserId ??
+    report?.reportedUserID ??
+    report?.reportedID ??
+    (typeof report?.reportedUser === 'string'
+      ? report?.reportedUser
+      : report?.reportedUser?.id) ??
+    null;
+
+  const ruName =
+    report?.reportedUserName ??                   // preferred
+    report?.reportedUsernName ??                  // typo fallback
+    report?.reported_user_name ??                 // snake_case fallback
+    (typeof report?.reportedUser === 'object' &&
+      (report?.reportedUser?.name || report?.reportedUser?.displayName)) ??
+    (ruId ? userNameCache[ruId] : null) ??        // cache from parent (if provided)
+    '—';
+
+  // NEW: violation count + recommended action effect (guard when no report)
+  useEffect(() => {
+    let alive = true;
+    if (!report) {
+      setViolationCount(null);
+      setRecAction(null);
+      return () => { alive = false; };
+    }
+    (async () => {
+      try {
+        const count = await getUserViolationCount({
+          userId: ruId,
+          userName: ruName && ruName !== '—' ? ruName : undefined
+        });
+        if (!alive) return;
+        setViolationCount(count);
+
+        const reason = autoDetectReason(report);
+        const rec = getRecommendedAction(count, reason);
+        setRecAction(rec);
+      } catch (e) {
+        if (!alive) return;
+        setViolationCount(0);
+        const reason = autoDetectReason(report);
+        setRecAction(getRecommendedAction(0, reason));
+      }
+    })();
+    return () => { alive = false; };
+  }, [ruId, ruName, report]);
+
+  // Keep early return AFTER hooks
   if (!report) return null;
 
   const typeStr = String(report.contentType || '').toLowerCase();
@@ -64,25 +234,6 @@ const ReportDetailModal = ({ report, onClose, onTakeAction, userNameCache = {} }
     return d ? d.toLocaleString() : '—';
   };
 
-  // resolve reported user's display name with broad fallbacks
-  const ruId =
-    report.reportedUserId ??
-    report.reportedUserID ??
-    report.reportedID ??
-    (typeof report.reportedUser === 'string'
-      ? report.reportedUser
-      : report.reportedUser?.id) ??
-    null;
-
-  const ruName =
-    report.reportedUserName ??                   // preferred
-    report.reportedUsernName ??                  // typo fallback
-    report.reported_user_name ??                 // snake_case fallback
-    (typeof report.reportedUser === 'object' &&
-      (report.reportedUser?.name || report.reportedUser?.displayName)) ??
-    (ruId ? userNameCache[ruId] : null) ??       // cache from parent (if provided)
-    '—';
-
   const avatarInitial = (ruName || 'U').trim().charAt(0).toUpperCase();
 
   const hasAnyContent =
@@ -91,6 +242,9 @@ const ReportDetailModal = ({ report, onClose, onTakeAction, userNameCache = {} }
     !!content.location ||
     (content.images && content.images.length > 0) ||
     !!content.createdAt;
+
+  // NEW: disable Take Action if the report is already resolved
+  const isResolved = String(report?.status || '').toLowerCase() === 'resolved';
 
   return (
     <div
@@ -199,13 +353,51 @@ const ReportDetailModal = ({ report, onClose, onTakeAction, userNameCache = {} }
             </div>
           </div>
         </div>
+        
+        {/* Recommended Action */}
+        <div style={{ padding: '0 18px 18px 18px' }}>
+          <div style={{ background: '#fff', border: '1px solid #eef2f7', borderRadius: 12, boxShadow: '0 1px 2px rgba(0,0,0,.03)', overflow: 'hidden' }}>
+            <div style={{ padding: 14, borderBottom: '1px solid #eef2f7', fontWeight: 700 }}>Recommended Action</div>
+            <div style={{ padding: 16 }}>
+              <div style={{ color: '#374151', lineHeight: 1.6, marginBottom: 12 }}>
+                Based on the user's violation history
+                {violationCount !== null ? ` (${violationCount} report${violationCount === 1 ? '' : 's'} on record)` : ''},
+                we recommend:
+              </div>
+              {recAction ? (
+                <ul style={{ paddingLeft: 16 }}>
+                  <li>
+                    <strong>{recAction.action}</strong>
+                    {recAction.reason ? ` — Reason: ${recAction.reason}` : ''}
+                  </li>
+                  {recAction.template && (
+                    <li style={{ color: '#6b7280' }}>{recAction.template}</li>
+                  )}
+                </ul>
+              ) : (
+                <div style={{ color: '#6b7280' }}>No recommended action available</div>
+              )}
+            </div>
+          </div>
+        </div>
 
         {/* Footer action */}
         <div style={{ padding: 18, display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #e5e7eb' }}>
           <button
             type="button"
-            onClick={() => onTakeAction?.(report)}
-            style={{ background: 'linear-gradient(90deg,#2563eb,#3b82f6)', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: 10, fontWeight: 700 }}
+            disabled={isResolved}
+            onClick={() => { if (!isResolved) onTakeAction?.(report); }}
+            style={{
+              background: isResolved ? '#9ca3af' : 'linear-gradient(90deg,#2563eb,#3b82f6)',
+              color: '#fff',
+              border: 'none',
+              padding: '10px 18px',
+              borderRadius: 10,
+              fontWeight: 700,
+              opacity: isResolved ? 0.7 : 1,
+              cursor: isResolved ? 'not-allowed' : 'pointer'
+            }}
+            title={isResolved ? 'This report is already resolved.' : 'Take moderation action'}
           >
             Take Action
           </button>
@@ -222,6 +414,13 @@ const TakeActionModal = ({ report, onClose, onSubmit }) => {
   const [notesVal, setNotesVal] = useState('');
   const [actionSubmitting, setActionSubmitting] = useState(false);
 
+  // NEW: auto-set reason when opening if empty
+  useEffect(() => {
+    if (reasonVal) return;
+    const auto = autoDetectReason(report);
+    if (auto) setReasonVal(auto);
+  }, [report, reasonVal]);
+
   const disabled = !typeVal || !reasonVal || actionSubmitting;
   const name = report?.reportedUser?.name || 'the user';
 
@@ -237,7 +436,14 @@ const TakeActionModal = ({ report, onClose, onSubmit }) => {
   const handleTakeAction = async (payload) => {
     try {
       setActionSubmitting(true);
-      await Promise.resolve(onSubmit?.({ report, ...payload }));
+      // Apply moderation first
+      const modResult = await applyModerationAction(report, payload);
+
+      // NEW: update the report document status to "resolved"
+      await updateReportAfterAction(report, payload, modResult);
+
+      // Pass back (non-breaking)
+      await Promise.resolve(onSubmit?.({ report, moderationResult: modResult, ...payload }));
       onClose?.();
     } catch (e) {
       console.warn('TakeAction error:', e?.message || e);
@@ -275,21 +481,17 @@ const TakeActionModal = ({ report, onClose, onSubmit }) => {
           {/* Action Type */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Action Type *</div>
-            <select className="form-input" value={typeVal} onChange={(e) => setTypeVal(e.target.value)}>
+            <select className="form-input-dest" value={typeVal} onChange={(e) => setTypeVal(e.target.value)}>
               <option value="">Select an action</option>
-              <option>Send Warning</option>
-              <option>Remove Content Only</option>
               <option>Suspend Account</option>
               <option>Ban Account</option>
-              <option>Permanently Delete Account</option>
-              <option>Dismiss Report</option>
             </select>
           </div>
 
           {/* Reason */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Reason for Action *</div>
-            <select className="form-input" value={reasonVal} onChange={(e) => setReasonVal(e.target.value)}>
+            <select className="form-input-dest" value={reasonVal} onChange={(e) => setReasonVal(e.target.value)}>
               <option value="">Select reason</option>
               <option>Inappropriate Content</option>
               <option>Spam/Promotional Content</option>
@@ -299,21 +501,9 @@ const TakeActionModal = ({ report, onClose, onSubmit }) => {
               <option>Violence/Threats</option>
               <option>Copyright Violation</option>
               <option>Privacy Violation</option>
-              <option>Other</option>
             </select>
           </div>
 
-          {/* Notes */}
-          <div>
-            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Additional Notes</div>
-            <textarea
-              className="form-input"
-              placeholder="Add any additional context or notes about this action..."
-              value={notesVal}
-              onChange={(e) => setNotesVal(e.target.value)}
-              style={{ minHeight: 110 }}
-            />
-          </div>
         </div>
 
         {/* Footer */}
@@ -341,6 +531,193 @@ const TakeActionModal = ({ report, onClose, onSubmit }) => {
     </div>
   );
 };
+
+// ADD AFTER getRecommendedAction (do not remove anything above)
+const SUSPEND_DURATIONS_DAYS = {
+  Inappropriate_Content: 1,
+  Spam_Promotional_Content: 3,
+  Harassment_Bullying: 3,
+  Fake_Misleading_Content: 7,
+  Hate_Speech: 7,
+  Violence_Threats: 14,
+  Copyright_Violation: 30,
+  Privacy_Violation: 30
+};
+
+// Helper: remove reported content (best-effort)
+async function removeReportedContent(report) {
+  try {
+    const db = getFirestore();
+    // Try explicit ids
+    const contentId =
+      report?.contentId ||
+      report?.content?.id ||
+      report?.postId ||
+      report?.commentId ||
+      report?.content?.postId ||
+      report?.content?.commentId ||
+      null;
+
+    if (!contentId) return { removed: false, reason: 'no-id' };
+
+    // Try community collection
+    try {
+      const ref = doc(db, 'community', contentId);
+      await deleteDoc(ref);
+      return { removed: true, collection: 'community' };
+    } catch {}
+
+    // Try comments collection
+    try {
+      const ref = doc(db, 'comments', contentId);
+      await deleteDoc(ref);
+      return { removed: true, collection: 'comments' };
+    } catch {}
+
+    // Fallback: search by reportedUserId + text (expensive, limited)
+    const ruId = report?.reportedUserId;
+    if (ruId) {
+      const q = query(collection(db, 'community'), where('userId', '==', ruId));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        if (String(d.data()?.text || '').includes(report?.content?.text || '') ||
+            String(d.data()?.body || '').includes(report?.content?.body || '')) {
+          await deleteDoc(d.ref);
+          return { removed: true, collection: 'community-match' };
+        }
+      }
+    }
+    return { removed: false, reason: 'not-found' };
+  } catch (e) {
+    console.warn('removeReportedContent error', e);
+    return { removed: false, error: e?.message };
+  }
+}
+
+// Apply moderation action (warning / suspend / ban / remove content)
+async function applyModerationAction(report, { actionType, reason, notes }) {
+  try {
+    const db = getFirestore();
+    const ruId =
+      report?.reportedUserId ??
+      report?.reportedUserID ??
+      report?.reportedID ??
+      (typeof report?.reportedUser === 'string'
+        ? report?.reportedUser
+        : report?.reportedUser?.id) ??
+      null;
+    if (!ruId) return { ok: false, error: 'no-user-id' };
+
+    const userRef = doc(db, 'users', ruId);
+    const updates = {};
+    const now = new Date();
+
+    if (actionType === 'Send Warning') {
+      const key = reasonLabelToKey(reason);
+      const templateMsg = action_types?.Send_Warning?.[key]?.[0] || null;
+      updates['moderation.warnings'] = arrayUnion({
+        reason,
+        message: templateMsg,        // NEW: store templated warning message
+        notes: notes || '',
+        at: serverTimestamp()
+      });
+      updates['moderation.lastAction'] = {
+        type: 'warning',
+        reason,
+        message: templateMsg || null,
+        at: serverTimestamp()
+      };
+    }
+
+    if (actionType === 'Suspend Account') {
+      const key = reasonLabelToKey(reason);
+      const days = SUSPEND_DURATIONS_DAYS[key] || 1;
+      const until = new Date(now.getTime() + days * 86400000);
+      updates['moderation.status'] = 'suspended';
+      updates['moderation.suspensionEnds'] = until;
+      updates['moderation.lastAction'] = {
+        type: 'suspend',
+        reason,
+        days,
+        until,
+        at: serverTimestamp()
+      };
+    }
+
+    if (actionType === 'Ban Account') {
+      updates['moderation.status'] = 'banned';
+      updates['moderation.bannedAt'] = serverTimestamp();
+      updates['moderation.lastAction'] = {
+        type: 'ban',
+        reason,
+        at: serverTimestamp()
+      };
+    }
+
+    let removalInfo = null;
+    if (actionType === 'Remove Content Only') {
+      removalInfo = await removeReportedContent(report);
+      updates['moderation.lastAction'] = {
+        type: 'remove_content',
+        reason,
+        removed: removalInfo?.removed || false,
+        collection: removalInfo?.collection || null,
+        at: serverTimestamp()
+      };
+      if (removalInfo?.removed) {
+        updates['moderation.removals'] = arrayUnion({
+          reason,
+          reportId: report?.id || null,
+          at: serverTimestamp()
+        });
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await updateDoc(userRef, updates);
+    }
+
+    return { ok: true, updates, removalInfo };
+  } catch (e) {
+    console.warn('applyModerationAction error', e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+// NEW: helper to update report status after action
+async function updateReportAfterAction(report, { actionType, reason, notes }, moderationResult) {
+  try {
+    const db = getFirestore();
+    const reportId = report?.id || report?.reportId || report?.reportID;
+    if (!reportId) return { ok: false, error: 'no-report-id' };
+
+    // Map any taken action to a terminal status recognizable by StatusBadge
+    // Options supported by UI: pending | under_review | escalated | resolved
+    const status = 'resolved';
+
+    const ref = doc(db, 'report', reportId);
+    await updateDoc(ref, {
+      status,
+      actionType,
+      actionReason: reason || null,
+      actionNotes: notes || '',
+      handledAt: serverTimestamp(),
+      handled: true,
+      // Optional: store moderation outcome summary
+      moderationResult: moderationResult?.ok === true ? {
+        updated: true,
+        removal: moderationResult?.removalInfo || null
+      } : {
+        updated: false,
+        error: moderationResult?.error || null
+      }
+    });
+    return { ok: true };
+  } catch (e) {
+    console.warn('updateReportAfterAction error:', e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
 
 export { ReportDetailModal, TakeActionModal };
 export default ReportDetailModal;

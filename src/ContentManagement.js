@@ -1867,8 +1867,23 @@ useEffect(() => {
                       </button>
                       <button
                         className="btn-secondary"
-                        style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', padding: '6px 18px', borderRadius: 8, fontWeight: 700, fontSize: 14 }}
-                        onClick={() => openActionModal(r)}
+                        disabled={String(r.status || '').toLowerCase() === 'resolved'}
+                        style={{
+                          background: String(r.status || '').toLowerCase() === 'resolved' ? '#e5e7eb' : '#fee2e2',
+                          color: String(r.status || '').toLowerCase() === 'resolved' ? '#9ca3af' : '#b91c1c',
+                          border: 'none',
+                          padding: '6px 18px',
+                          borderRadius: 8,
+                          fontWeight: 700,
+                          fontSize: 14,
+                          cursor: String(r.status || '').toLowerCase() === 'resolved' ? 'not-allowed' : 'pointer',
+                          opacity: String(r.status || '').toLowerCase() === 'resolved' ? 0.7 : 1
+                        }}
+                        onClick={() => {
+                          if (String(r.status || '').toLowerCase() === 'resolved') return;
+                          openActionModal(r);
+                        }}
+                        title={String(r.status || '').toLowerCase() === 'resolved' ? 'This report is already resolved.' : 'Take action'}
                       >
                         Action
                       </button>

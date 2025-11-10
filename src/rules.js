@@ -137,3 +137,35 @@ export const category = {
         'Snacks & drinking water'
     ]
 };
+
+export const action_types = {
+    Suspend_Account: { // temporary suspension on account based on violation type if 3 posts/contents are reported (based the suspension duration on each violation type)
+        Inappropriate_Content: [
+            "Your account is suspended for 1 day due to posting content that violates our community guidelines. Please review the guidelines to avoid further violations."
+        ],
+        Spam_Promotional_Content: [
+            "Your account is suspended for 3 days due to posting content that has been identified as spam or promotional material, which is against our community guidelines. Please refrain from posting such content."
+        ],
+        Harassment_Bullying: [
+            "Your account is suspended for 3 days due to posting content that has been identified as harassment or bullying, which is a violation of our community guidelines. Please ensure respectful interactions with other users."
+        ],
+        Fake_Misleading_Content: [
+            "Your account is suspended for 7 days due to posting content that has been flagged as fake or misleading information, which goes against our community guidelines. Please verify your sources before sharing."
+        ],
+        Hate_Speech: [
+            "Your account is suspended for 7 days due to posting content that has been reported for hate speech, which is strictly prohibited by our community guidelines. Please adhere to respectful communication."
+        ],
+        Violence_Threats: [
+            "Your account is suspended for 14 days due to posting content that contains threats of violence, which violates our community guidelines. Such behavior is not tolerated on our platform."
+        ],
+        Copyright_Violation: [
+            "Your account is suspended for 30 days due to posting content that infringes on copyright laws and violates our community guidelines. Please ensure that you have the right to share any content you post."
+        ],
+        Privacy_Violation: [
+            "Your account is suspended for 30 days due to posting content that violates privacy guidelines by sharing personal information without consent. Please respect others' privacy."
+        ],
+    },   
+    Ban_Account: [ // permanent ban of account if 15 posts/contents are reported based on any of the violation type
+        "Your account has been banned due to repeated violations of our community guidelines."
+    ],  
+};
