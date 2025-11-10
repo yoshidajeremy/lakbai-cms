@@ -9,18 +9,18 @@ const u = ['B','KB','MB','GB']; let i=0; while(n>=1024 && i<u.length-1){n/=1024;
 
 // Pretty date for the "Last Modified" column (handles seconds/ms/date/string)
 function formatLastModified(v) {
-  if (!v) return '—';
-  let d = null;
-  if (v instanceof Date) d = v;
-  else if (typeof v === 'number') d = new Date(v < 1e12 ? v * 1000 : v);
-  else if (typeof v === 'string') {
-    const n = Number(v);
-    d = isNaN(n) ? new Date(v) : new Date(n < 1e12 ? n * 1000 : n);
-  } else if (v?.toDate) {
-    d = v.toDate();
-  }
-  if (!d || isNaN(d.getTime())) return '—';
-  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    if (!v) return '—';
+    let d = null;
+    if (v instanceof Date) d = v;
+    else if (typeof v === 'number') d = new Date(v < 1e12 ? v * 1000 : v);
+    else if (typeof v === 'string') {
+        const n = Number(v);
+        d = isNaN(n) ? new Date(v) : new Date(n < 1e12 ? n * 1000 : n);
+    } else if (v?.toDate) {
+        d = v.toDate();
+    }
+    if (!d || isNaN(d.getTime())) return '—';
+    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 // Pick best available modified field from an item
@@ -419,7 +419,7 @@ return (
         <thead>
             <tr>
             <th style={{ textAlign:'left' }}>Name</th>
-            <th style={{ textAlign:'center' }}>Last Modified</th>
+            <th style={{ textAlign:'left' }}>Last Modified</th>
             <th style={{ textAlign:'left', width:120 }}>Type</th>
             <th style={{ textAlign:'right', width:120 }}>Size</th>
             <th style={{ width:240 }}></th>
