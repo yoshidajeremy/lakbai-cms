@@ -2,6 +2,29 @@ import React from 'react';
 import { filesApi } from './api';
 import './FileManager.css';
 
+// ADD: commit cache + helper (above component to avoid scope issues)
+const gitCommitCache = {};
+async function fetchGitCommitDate(path) {
+  const owner = process.env.REACT_APP_GH_OWNER;
+  const repo  = process.env.REACT_APP_GH_REPO;
+  if (!owner || !repo || !path) return null;
+  if (gitCommitCache[path]) return gitCommitCache[path];
+  try {
+    const url = `https://api.github.com/repos/${owner}/${repo}/commits?path=${encodeURIComponent(path)}&per_page=1`;
+    const headers = {};
+    const token = process.env.REACT_APP_GH_TOKEN;
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const iso = data?.[0]?.commit?.committer?.date || data?.[0]?.commit?.author?.date || null;
+    if (iso) gitCommitCache[path] = iso;
+    return iso;
+  } catch {
+    return null;
+  }
+}
+
 function bytes(n) {
 if (n == null) return '';
 const u = ['B','KB','MB','GB']; let i=0; while(n>=1024 && i<u.length-1){n/=1024;i++} return `${n.toFixed(1)} ${u[i]}`;
@@ -80,9 +103,10 @@ export default function FileManager({ root = process.env.REACT_APP_FILES_ROOT ||
     const [renameModal, setRenameModal] = React.useState({ open: false, item: null, value: '' });
     const [modalFile, setModalFile] = React.useState(null);
     const [creatingFile, setCreatingFile] = React.useState(false);
-    // Add: keep previous states; new state for multi-file upload
     const [modalFiles, setModalFiles] = React.useState([]);
 
+    // ADD: git commit meta state
+    const [gitMeta, setGitMeta] = React.useState({});
 
 // Lightweight confirm dialog state
 const [confirmState, setConfirmState] = React.useState({ open: false, message: '', resolve: null });
@@ -439,9 +463,12 @@ return (
                     <a href="#" onClick={(e)=>{e.preventDefault(); openPreview(item);}}>{item.name}</a>
                 )}
                 </td>
-                <td>{formatLastModified(getItemLastModified(item))}</td>
+                {/* Prefer Git commit time if available */}
+                <td>{formatLastModified(gitMeta[item.path] || getItemLastModified(item))}</td>
                 <td>{item.type}</td>
-                <td style={{ textAlign:'right' }}>{item.type === 'file' ? bytes(item.size) : ''}</td>
+                <td style={{ textAlign:'right' }}>
+                  {item.type === 'file' ? bytes(item.size) : ''}
+                </td>
                 <td className="actions" style={{ textAlign:'right' }}>
                 <button className="btn-primary-cms" onClick={()=>onDownload(item)} >Download</button>
                 <button className="btn-edit" onClick={()=>onRename(item)}>Rename</button>
