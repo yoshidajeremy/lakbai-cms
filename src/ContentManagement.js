@@ -1045,8 +1045,6 @@ useEffect(() => {
   };
 
   // NEW: Report Details modal (shows only Firestore content; no templates)
-
-
   // Filtered reports (used by count + table)
   const filteredReports = React.useMemo(() => {
     const q = (reportSearch || '').trim().toLowerCase();
@@ -1284,7 +1282,7 @@ useEffect(() => {
 }, [active]);   
 
 // Pagination for Reports
-const REPORT_PAGE_SIZE = 20;
+const REPORT_PAGE_SIZE = 100;
 const [reportPage, setReportPage] = useState(1);
 const [lastReportDoc, setLastReportDoc] = useState(null);
 const [hasMoreReports, setHasMoreReports] = useState(true);
