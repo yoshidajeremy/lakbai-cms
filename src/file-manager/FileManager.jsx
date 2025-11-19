@@ -10,17 +10,24 @@ async function fetchGitCommitDate(path) {
   if (!owner || !repo || !path) return null;
   if (gitCommitCache[path]) return gitCommitCache[path];
   try {
-    const url = `https://api.github.com/repos/${owner}/${repo}/commits?path=${encodeURIComponent(path)}&per_page=1`;
-    const headers = {};
+    // GitHub expects repo-relative paths, not absolute
+    const repoPath = path.replace(/^\/+/, '');
+    const url = `https://api.github.com/repos/${owner}/${repo}/commits?path=${encodeURIComponent(repoPath)}&per_page=1`;
+    const headers = { Accept: 'application/vnd.github.v3+json' };
     const token = process.env.REACT_APP_GH_TOKEN;
     if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(url, { headers });
     if (!res.ok) return null;
     const data = await res.json();
-    const iso = data?.[0]?.commit?.committer?.date || data?.[0]?.commit?.author?.date || null;
-    if (iso) gitCommitCache[path] = iso;
-    return iso;
-  } catch {
+    // Defensive: check if array and has at least one commit
+    if (Array.isArray(data) && data.length > 0) {
+      const iso = data[0]?.commit?.committer?.date || data[0]?.commit?.author?.date || null;
+      if (iso) gitCommitCache[path] = iso;
+      return iso;
+    }
+    return null;
+  } catch (e) {
+    console.warn('GitHub commit fetch failed:', e);
     return null;
   }
 }
@@ -467,7 +474,7 @@ return (
                 <td>{formatLastModified(gitMeta[item.path] || getItemLastModified(item))}</td>
                 <td>{item.type}</td>
                 <td style={{ textAlign:'right' }}>
-                  {item.type === 'file' ? bytes(item.size) : ''}
+                    {item.type === 'file' ? bytes(item.size) : ''}
                 </td>
                 <td className="actions" style={{ textAlign:'right' }}>
                 <button className="btn-primary-cms" onClick={()=>onDownload(item)} >Download</button>
