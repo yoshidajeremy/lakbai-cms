@@ -114,6 +114,21 @@ export default function FileManager({ root = process.env.REACT_APP_FILES_ROOT ||
 
     // ADD: git commit meta state
     const [gitMeta, setGitMeta] = React.useState({});
+    
+    React.useEffect(() => {
+      let cancelled = false;
+      async function fetchAllCommits() {
+        for (const item of items) {
+          if (item.type !== 'file') continue;
+          if (gitMeta[item.path]) continue;
+          const iso = await fetchGitCommitDate(item.path);
+          if (cancelled) return;
+          if (iso) setGitMeta(meta => ({ ...meta, [item.path]: iso }));
+        }
+      }
+      if (items && items.length > 0) fetchAllCommits();
+      return () => { cancelled = true; };
+    }, [items]);
 
 // Lightweight confirm dialog state
 const [confirmState, setConfirmState] = React.useState({ open: false, message: '', resolve: null });
