@@ -2,68 +2,9 @@ import React from 'react';
 import { filesApi } from './api';
 import './FileManager.css';
 
-// ADD: commit cache + helper (above component to avoid scope issues)
-const gitCommitCache = {};
-async function fetchGitCommitDate(path) {
-  const owner = process.env.REACT_APP_GH_OWNER;
-  const repo  = process.env.REACT_APP_GH_REPO;
-  if (!owner || !repo || !path) return null;
-  if (gitCommitCache[path]) return gitCommitCache[path];
-  try {
-    // GitHub expects repo-relative paths, not absolute
-    const repoPath = path.replace(/^\/+/, '');
-    const url = `https://api.github.com/repos/${owner}/${repo}/commits?path=${encodeURIComponent(repoPath)}&per_page=1`;
-    const headers = { Accept: 'application/vnd.github.v3+json' };
-    const token = process.env.REACT_APP_GH_TOKEN;
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(url, { headers });
-    if (!res.ok) return null;
-    const data = await res.json();
-    // Defensive: check if array and has at least one commit
-    if (Array.isArray(data) && data.length > 0) {
-      const iso = data[0]?.commit?.committer?.date || data[0]?.commit?.author?.date || null;
-      if (iso) gitCommitCache[path] = iso;
-      return iso;
-    }
-    return null;
-  } catch (e) {
-    console.warn('GitHub commit fetch failed:', e);
-    return null;
-  }
-}
-
 function bytes(n) {
 if (n == null) return '';
 const u = ['B','KB','MB','GB']; let i=0; while(n>=1024 && i<u.length-1){n/=1024;i++} return `${n.toFixed(1)} ${u[i]}`;
-}
-
-// Pretty date for the "Last Modified" column (handles seconds/ms/date/string)
-function formatLastModified(v) {
-    if (!v) return '—';
-    let d = null;
-    if (v instanceof Date) d = v;
-    else if (typeof v === 'number') d = new Date(v < 1e12 ? v * 1000 : v);
-    else if (typeof v === 'string') {
-        const n = Number(v);
-        d = isNaN(n) ? new Date(v) : new Date(n < 1e12 ? n * 1000 : n);
-    } else if (v?.toDate) {
-        d = v.toDate();
-    }
-    if (!d || isNaN(d.getTime())) return '—';
-    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-}
-
-// Pick best available modified field from an item
-function getItemLastModified(item) {
-  // Common API shapes: mtimeMs, mtime, lastModified, updatedAt, modified
-  return (
-    item?.mtimeMs ??
-    item?.mtime ??
-    item?.lastModified ??
-    item?.updatedAt ??
-    item?.modified ??
-    null
-  );
 }
 
 async function blobToBase64(blob) {
@@ -115,20 +56,6 @@ export default function FileManager({ root = process.env.REACT_APP_FILES_ROOT ||
     // ADD: git commit meta state
     const [gitMeta, setGitMeta] = React.useState({});
     
-    React.useEffect(() => {
-      let cancelled = false;
-      async function fetchAllCommits() {
-        for (const item of items) {
-          if (item.type !== 'file') continue;
-          if (gitMeta[item.path]) continue;
-          const iso = await fetchGitCommitDate(item.path);
-          if (cancelled) return;
-          if (iso) setGitMeta(meta => ({ ...meta, [item.path]: iso }));
-        }
-      }
-      if (items && items.length > 0) fetchAllCommits();
-      return () => { cancelled = true; };
-    }, [items]);
 
 // Lightweight confirm dialog state
 const [confirmState, setConfirmState] = React.useState({ open: false, message: '', resolve: null });
@@ -465,7 +392,6 @@ return (
         <thead>
             <tr>
             <th style={{ textAlign:'left' }}>Name</th>
-            <th style={{ textAlign:'left' }}>Last Modified</th>
             <th style={{ textAlign:'left', width:120 }}>Type</th>
             <th style={{ textAlign:'right', width:120 }}>Size</th>
             <th style={{ width:240 }}></th>
@@ -486,7 +412,6 @@ return (
                 )}
                 </td>
                 {/* Prefer Git commit time if available */}
-                <td>{formatLastModified(gitMeta[item.path] || getItemLastModified(item))}</td>
                 <td>{item.type}</td>
                 <td style={{ textAlign:'right' }}>
                     {item.type === 'file' ? bytes(item.size) : ''}
