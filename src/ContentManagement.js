@@ -1263,23 +1263,36 @@ useEffect(() => {
     .finally(() => setLoadingDest(false));
 }, [active]);
 
-// Add this useEffect inside ContentManagement, after your state declarations:
+// Add this state at the top of ContentManagement:
+const [adminPhotoCount, setAdminPhotoCount] = useState(0);
 
+// Add this effect after your state declarations:
 useEffect(() => {
-  if (active !== 'destinations') return;
-  setLoadingDest(true);
+  async function fetchAdminPhotos() {
+    try {
+      const q = query(
+        collection(db, 'photos'),
+        where('createdBy', '==', 'Admin')
+      );
+      const snap = await getDocs(q);
+      setAdminPhotoCount(snap.size);
+    } catch {
+      setAdminPhotoCount(0);
+    }
+  }
+  fetchAdminPhotos();
+}, []);
 
-  // Always fetch directly from Firestore
-  getDocs(query(collection(db, 'destinations'), orderBy('name')))
-    .then((snap) => {
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setDestinations(items);
-    })
-    .catch((err) => {
-      console.error('Failed to fetch destinations from Firestore:', err);
-    })
-    .finally(() => setLoadingDest(false));
-}, [active]);   
+// Then update your stat card to show the count:
+<div className="stat-card content-card gradient-4" style={{ padding: 20 }}>
+  <div style={{ fontWeight: 700, color: '#fff' }}>Total Images</div>
+  <div className="stat-value" style={{ color: '#fff', minHeight: 38 }}>
+    {loading
+      ? <span className="loading-spinner" />
+      : adminPhotoCount}
+  </div>
+  <div className="muted" style={{ opacity: 0.9 }}>Available Images (created by Admin)</div>
+</div>
 
 // Pagination for Reports
 const REPORT_PAGE_SIZE = 100;
@@ -1449,9 +1462,9 @@ useEffect(() => {
                 <div className="stat-value" style={{ color: '#fff', minHeight: 38 }}>
                   {loading
                     ? <span className="loading-spinner" />
-                    : totalImages}
+                    : adminPhotoCount}
                 </div>
-                <div className="muted" style={{ opacity: 0.9 }}>Available Images</div>
+                <div className="muted" style={{ opacity: 0.9 }}>Available Images (created by Admin)</div>
               </div>
 
               </div>
@@ -1779,7 +1792,7 @@ useEffect(() => {
                   <option value="all">All Priority</option>
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
-                  <option value="high">High</option>
+                  <option value="high">High/</option>
                 </select>
 
                 <select className="form-input" value={reportType} onChange={(e) => setReportType(e.target.value)} style={{ width: 160 }}>
@@ -1797,7 +1810,7 @@ useEffect(() => {
               {/* Header */}
               <div className="reports-table-header">
                 {['Report Details', 'Reported User', 'Content Type', 'Reason', 'Priority', 'Status', 'Reported Date', 'Actions'].map((h) => (
-                  <div key={h} className="reports-table-cell" style={{ fontWeight: 700, color: '#6b7280', background: '#f6f8fa', fontSize: 14, borderBottom: '1px solid #eef2f7' }}>
+                  <div key={h} className="reports-table-cell" style={{ fontWeight: 700, color: '#6b7280', background: '#f6f8fa', fontSize:  14, borderBottom: '1px solid #eef2f7' }}>
                     {h}
                   </div>
                 ))}
