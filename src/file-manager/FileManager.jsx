@@ -481,7 +481,13 @@ const openPreview = async (item) => {
                 {item.type === 'dir' ? (
                     <a href="#" onClick={(e)=>{e.preventDefault(); go(item.path);}}>{item.name}</a>
                 ) : (
-                    <a href="#" onClick={(e)=>{e.preventDefault(); openPreview(item);}}>{item.name}</a>
+                    // If text-editable, open the text editor; else open preview
+                    <a
+                        href="#"
+                        onClick={(e)=>{ e.preventDefault(); (isTextEditable(item) ? openTextEditor : openPreview)(item); }}
+                    >
+                        {item.name}
+                    </a>
                 )}
                 </td>
                 {/* Prefer Git commit time if available */}
@@ -491,10 +497,10 @@ const openPreview = async (item) => {
                 </td>
                 <td className="actions" style={{ textAlign:'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button className="btn-primary-cms" onClick={()=>onDownload(item)} >Download</button>
-                {/* ADD: Edit button for text files */}
-                {isTextEditable(item) && (
+                {/* REMOVE: Edit button; clicking name now opens editor for text files */}
+                {/* {isTextEditable(item) && (
                     <button className="btn-edit" onClick={()=>openTextEditor(item)}>Edit</button>
-                )}
+                )} */}
                 <button className="btn-edit" onClick={()=>onRename(item)}>Rename</button>
                 <button className="btn-danger" onClick={()=>onDelete(item)}>Delete</button>
                 </td>
