@@ -41,17 +41,21 @@ function normalizeCsvRows(rows, minCols = 1) {
 }
 
 export default function FileManager({ root = process.env.REACT_APP_FILES_ROOT || '' }) {
-    const [cwd, setCwd] = React.useState(root);           // e.g. "public", "public/images"
+    const [cwd, setCwd] = React.useState(root);
     const [items, setItems] = React.useState([]);
     const [loading, setLoading] = React.useState(false);
     const [error, setError] = React.useState('');
-    const [preview, setPreview] = React.useState(null);   // { path, contentBase64, mediaType }
+    const [preview, setPreview] = React.useState(null);
     const [csvEdit, setCsvEdit] = React.useState(null);
     const [modal, setModal] = React.useState({ open: false, type: '', value: '' });
     const [renameModal, setRenameModal] = React.useState({ open: false, item: null, value: '' });
     const [modalFile, setModalFile] = React.useState(null);
     const [creatingFile, setCreatingFile] = React.useState(false);
     const [modalFiles, setModalFiles] = React.useState([]);
+
+    // ADD: Text editor modal state
+    const [textEdit, setTextEdit] = React.useState(null);
+    // shape: { path, text, mediaType }
 
     // ADD: git commit meta state
     const [gitMeta, setGitMeta] = React.useState({});
@@ -195,87 +199,156 @@ try {
 };
 
 const openPreview = async (item) => {
-try {
-    if (item.type !== 'file') return;
-    const { contentBase64, mediaType, sha } = await filesApi.get(item.path);
-    const raw = (() => {
-        try { return decodeURIComponent(escape(atob(contentBase64))); } catch { return ''; }
-    })();
-    if (item.name.toLowerCase().endsWith('.csv')) {
-        const rows = normalizeCsvRows(parseCsv(raw));
-        setCsvEdit({ path: item.path, rows, raw, sha, mediaType });
-        setPreview(null);
-    } else {
-        setPreview({ path: item.path, contentBase64, mediaType });
-        setCsvEdit(null);
-    }
-} catch (e) {
-    setError(e?.message || String(e));
-}
-};
+        try {
+            if (item.type !== 'file') return;
+            const { contentBase64, mediaType, sha } = await filesApi.get(item.path);
+            const raw = (() => {
+                try { return decodeURIComponent(escape(atob(contentBase64))); } catch { return ''; }
+            })();
+            if (item.name.toLowerCase().endsWith('.csv')) {
+                const rows = normalizeCsvRows(parseCsv(raw));
+                setCsvEdit({ path: item.path, rows, raw, sha, mediaType });
+                setPreview(null);
+                setTextEdit(null);
+            } else {
+                setPreview({ path: item.path, contentBase64, mediaType });
+                setCsvEdit(null);
+                setTextEdit(null);
+            }
+        } catch (e) {
+            setError(e?.message || String(e));
+        }
+    };
 
-  // Update a single cell (kept as-is)
-const handleCsvCellChange = (rowIdx, colIdx, value) => {
-    setCsvEdit(edit => {
-    const rows = edit.rows.map((row, r) =>
-        r === rowIdx ? row.map((cell, c) => (c === colIdx ? value : cell)) : row
-        );
-        return { ...edit, rows };
-    });
-};
+    // Helper: identify editable text types
+    const isTextEditable = (item) => {
+        if (item.type !== 'file') return false;
+        const name = item.name.toLowerCase();
+        if (name.endsWith('.txt') || name.endsWith('.json') || name.endsWith('.html') || name.endsWith('.htm')) return true;
+        const mt = preview?.mediaType || '';
+        return mt.startsWith('text/') || mt === 'application/json' || mt === 'text/html';
+    };
 
-  // New: grid helpers
-const csvColCount = React.useMemo(
-    () => Math.max(1, ...(csvEdit?.rows || []).map(r => r.length || 0)),
-    [csvEdit]
-);
+    // Open text editor
+    const openTextEditor = async (item) => {
+        try {
+            const { contentBase64, mediaType } = await filesApi.get(item.path);
+            const text = (() => {
+                try { return decodeURIComponent(escape(atob(contentBase64))); } catch { return ''; }
+            })();
+            setTextEdit({ path: item.path, text, mediaType });
+            setPreview(null);
+            setCsvEdit(null);
+        } catch (e) {
+            setError(e?.message || String(e));
+        }
+    };
 
-const padCsvGrid = () =>
-    setCsvEdit(edit => ({ ...edit, rows: normalizeCsvRows(edit.rows) }));
+    const formatJson = () => {
+        if (!textEdit) return;
+        try {
+            const obj = JSON.parse(textEdit.text);
+            setTextEdit({ ...textEdit, text: JSON.stringify(obj, null, 2) });
+        } catch { /* ignore */ }
+    };
 
-const addCsvRow = () =>
-    setCsvEdit(edit => {
-        const cols = Math.max(1, ...(edit.rows || []).map(r => r.length || 0));
-        return { ...edit, rows: [...edit.rows, Array(cols).fill('')] };
-    });
+    const saveTextEdit = async () => {
+        if (!textEdit) return;
+        try {
+            const b64 = btoa(unescape(encodeURIComponent(textEdit.text)));
+            await filesApi.upload({
+                path: textEdit.path,
+                contentBase64: b64,
+                message: `Edit text ${textEdit.path}`,
+            });
+            setTextEdit(null);
+            await refresh();
+        } catch (e) {
+            setError(e?.message || String(e));
+        }
+    };
 
-const addCsvColumn = () =>
-    setCsvEdit(edit => ({ ...edit, rows: edit.rows.map(r => [...r, '']) }));
+    // ADD: CSV helpers used by the modal
+    const csvColCount = React.useMemo(() => {
+        if (!csvEdit?.rows?.length) return 0;
+        return Math.max(...csvEdit.rows.map(r => (Array.isArray(r) ? r.length : 0)));
+    }, [csvEdit]);
 
-const removeCsvRow = (rIdx) =>
-    setCsvEdit(edit => ({ ...edit, rows: edit.rows.filter((_, i) => i !== rIdx) }));
+    const addCsvRow = () => {
+        if (!csvEdit) return;
+        setCsvEdit(ed => ({ ...ed, rows: [...ed.rows, Array(csvColCount || 1).fill('')] }));
+    };
 
-const removeCsvColumn = (cIdx) =>
-    setCsvEdit(edit => ({ ...edit, rows: edit.rows.map(r => r.filter((_, i) => i !== cIdx)) }));
+    const addCsvColumn = () => {
+        if (!csvEdit) return;
+        setCsvEdit(ed => ({
+            ...ed,
+            rows: ed.rows.map(r => [...normalizeCsvRows([r], csvColCount || 0)[0], ''])
+        }));
+    };
 
-  // Save (kept as-is)
-const handleCsvSave = async () => {
-    if (!csvEdit) return;
-    // ensure grid is rectangular before saving
-    const csvString = toCsv(normalizeCsvRows(csvEdit.rows));
-    const b64 = btoa(unescape(encodeURIComponent(csvString)));
-    await filesApi.upload({
-        path: csvEdit.path,
-        contentBase64: b64,
-        message: `Edit CSV ${csvEdit.path}`,
-    });
-    setCsvEdit(null);
-    await refresh();
-};
+    const padCsvGrid = () => {
+        if (!csvEdit) return;
+        setCsvEdit(ed => ({ ...ed, rows: normalizeCsvRows(ed.rows, csvColCount || 1) }));
+    };
 
-const toolbar = (
-    <div className="fm-toolbar">
-        <button className='btn-secondary' onClick={up} disabled={cwd === root}>Up</button>
-        <div className="fm-path">{cwd}</div>
-        <div style={{ flex:1 }} />
-        {/* Text changed only; handler unchanged */}
-        <button className='btn-primary-cms' onClick={onCreateFile}>Upload files</button>
-        <button className='btn-primary-cms' onClick={onMkdir}>New folder</button>
-        <button className='btn-primary-cms' onClick={refresh} disabled={loading}>Refresh</button>
-    </div>
-);
+    const removeCsvRow = (rIdx) => {
+        if (!csvEdit) return;
+        setCsvEdit(ed => ({ ...ed, rows: ed.rows.filter((_, i) => i !== rIdx) }));
+    };
 
-return (
+    const removeCsvColumn = (cIdx) => {
+        if (!csvEdit) return;
+        setCsvEdit(ed => ({
+            ...ed,
+            rows: ed.rows.map(r => r.filter((_, i) => i !== cIdx))
+        }));
+    };
+
+    const handleCsvCellChange = (rIdx, cIdx, value) => {
+        if (!csvEdit) return;
+        setCsvEdit(ed => {
+            const rows = ed.rows.map((row, i) => {
+                if (i !== rIdx) return row;
+                const padded = normalizeCsvRows([row], Math.max(csvColCount, cIdx + 1))[0];
+                padded[cIdx] = value;
+                return padded;
+            });
+            return { ...ed, rows };
+        });
+    };
+
+    const handleCsvSave = async () => {
+        if (!csvEdit) return;
+        try {
+            const rows = normalizeCsvRows(csvEdit.rows, csvColCount || 1);
+            const csvText = toCsv(rows);
+            const b64 = btoa(unescape(encodeURIComponent(csvText)));
+            await filesApi.upload({
+                path: csvEdit.path,
+                contentBase64: b64,
+                message: `Edit CSV ${csvEdit.path}`,
+            });
+            setCsvEdit(null);
+            await refresh();
+        } catch (e) {
+            setError(e?.message || String(e));
+        }
+    };
+
+    const toolbar = (
+        <div className="fm-toolbar">
+            <button className='btn-secondary' onClick={up} disabled={cwd === root}>Up</button>
+            <div className="fm-path">{cwd}</div>
+            <div style={{ flex:1 }} />
+            {/* Text changed only; handler unchanged */}
+            <button className='btn-primary-cms' onClick={onCreateFile}>Upload files</button>
+            <button className='btn-primary-cms' onClick={onMkdir}>New folder</button>
+            <button className='btn-primary-cms' onClick={refresh} disabled={loading}>Refresh</button>
+        </div>
+    );
+
+    return (
     <div className="fm">
         {toolbar}
         {error && <div style={{ color:'#b91c1c', marginTop:8 }}>{error}</div>}
@@ -394,7 +467,7 @@ return (
             <th style={{ textAlign:'left' }}>Name</th>
             <th style={{ textAlign:'left', width:120 }}>Type</th>
             <th style={{ textAlign:'right', width:120 }}>Size</th>
-            <th style={{ width:240 }}></th>
+            <th style={{ width:320 }}></th>
             </tr>
         </thead>
         <tbody>
@@ -416,8 +489,12 @@ return (
                 <td style={{ textAlign:'right' }}>
                     {item.type === 'file' ? bytes(item.size) : ''}
                 </td>
-                <td className="actions" style={{ textAlign:'right' }}>
+                <td className="actions" style={{ textAlign:'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button className="btn-primary-cms" onClick={()=>onDownload(item)} >Download</button>
+                {/* ADD: Edit button for text files */}
+                {isTextEditable(item) && (
+                    <button className="btn-edit" onClick={()=>openTextEditor(item)}>Edit</button>
+                )}
                 <button className="btn-edit" onClick={()=>onRename(item)}>Rename</button>
                 <button className="btn-danger" onClick={()=>onDelete(item)}>Delete</button>
                 </td>
@@ -550,6 +627,32 @@ return (
             <button className="btn-danger" onClick={() => closeConfirm(true)}>Delete</button>
             </div>
         </div>
+        </div>
+    )}
+    {/* ADD: Text editor modal */}
+    {textEdit && (
+        <div className="fm-confirm" style={{ zIndex: 2000 }}>
+            <div className="box" style={{ minWidth: 600, maxWidth: '95vw', height: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <strong>Edit: {textEdit.path}</strong>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        {(textEdit.mediaType === 'application/json' || textEdit.path.toLowerCase().endsWith('.json')) && (
+                            <button className="btn-secondary" onClick={formatJson}>Format JSON</button>
+                    )}
+                        <button className="btn-danger" onClick={() => setTextEdit(null)}>Close</button>
+                    </div>
+                </div>
+                <textarea
+                    value={textEdit.text}
+                    onChange={e => setTextEdit({ ...textEdit, text: e.target.value })}
+                    style={{ flex: 1, width: '100%', resize: 'none', border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, fontFamily: 'monospace', fontSize: 13 }}
+                    spellCheck={false}
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                    <button className="btn-danger" onClick={() => setTextEdit(null)}>Cancel</button>
+                    <button className="btn-primary-cms" onClick={saveTextEdit}>Save</button>
+                </div>
+            </div>
         </div>
     )}
     </div>
