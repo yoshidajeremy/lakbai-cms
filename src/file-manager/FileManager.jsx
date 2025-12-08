@@ -96,7 +96,11 @@ const go = (next) => setCwd(next.replace(/\/+/g, '/'));
 const up = () => { if (cwd === root) return; go(segments.slice(0, -1).join('/')); };
 
 const onUpload = async (file) => {
-    // ...existing code...
+    // Limit file size to 10MB
+    if (file.size > 10 * 1024 * 1024) {
+        setError(`File "${file.name}" exceeds 10MB limit.`);
+        return;
+    }
     const b64 = await blobToBase64(file);
     const path = `${cwd}/${file.name}`.replace(/\/+/g,'/');
     await filesApi.upload({
@@ -164,20 +168,26 @@ try {
 }
 };
 const handleCreateFile = async () => {
-try {
-    if (!modalFiles || modalFiles.length === 0) return;
-    setModal({ open: false, type: '', value: '' });
+    try {
+        if (!modalFiles || modalFiles.length === 0) return;
+        // Limit all files to 10MB each
+        const tooLarge = modalFiles.find(f => f.size > 10 * 1024 * 1024);
+        if (tooLarge) {
+            setError(`File "${tooLarge.name}" exceeds 10MB limit.`);
+            return;
+        }
+        setModal({ open: false, type: '', value: '' });
 
-    await Promise.all(
-        modalFiles.map(async (file) => {
-        const b64 = await blobToBase64(file);
-        const path = `${cwd}/${file.name}`.replace(/\/+/g, '/');
-        await filesApi.upload({
-            path,
-            contentBase64: b64,
-            message: `Upload ${file.name} to ${cwd}`,
-            });
-        })
+        await Promise.all(
+            modalFiles.map(async (file) => {
+                const b64 = await blobToBase64(file);
+                const path = `${cwd}/${file.name}`.replace(/\/+/g, '/');
+                await filesApi.upload({
+                    path,
+                    contentBase64: b64,
+                    message: `Upload ${file.name} to ${cwd}`,
+                });
+            })
         );
 
         setModalFiles([]);
