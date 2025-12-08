@@ -1075,40 +1075,6 @@ export default function EditProfileCMS({
                         <input className="form-input-dest" value={form.email}
                           onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
                       </div>
-                      <div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Password</div>
-                        <div style={{ position: 'relative' }}>
-                          <input
-                            className="form-input-dest"
-                            type={showPwd ? 'text' : 'password'}
-                            value={form.password}
-                            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                            placeholder="Set a new password"
-                            style={{ paddingRight: 38 }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowPwd((v) => !v)}
-                            aria-label={showPwd ? 'Hide password' : 'Show password'}
-                            style={{
-                              position: 'absolute',
-                              right: 8,
-                              top: '50%',
-                              transform: 'translateY(-50%)',
-                              background: 'transparent',
-                              border: 'none',
-                              cursor: 'pointer',
-                              fontSize: 16,
-                              color: '#6b7280'
-                            }}
-                          >
-                            {showPwd ? '🙈' : '👁️'}
-                          </button>
-                        </div>
-                        <div className="muted small" style={{ marginTop: 6 }}>
-                          For security, the current password cannot be shown. Enter a new one to change it.
-                        </div>
-                      </div>
 
                       {/* Sign-in Provider (read-only, from Firebase) */}
                       <div>
